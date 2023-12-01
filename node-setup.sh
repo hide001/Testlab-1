@@ -76,6 +76,7 @@ task6(){
   echo -e "\n${ORANGE}TASK: ${GREEN}[Building Backend]${NC}\n"
   cd node_src
   go mod download
+  go get github.com/ethereum/go-ethereum/consensus/congress
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
