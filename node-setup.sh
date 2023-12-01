@@ -79,7 +79,7 @@ task6(){
   go get github.com/ethereum/go-ethereum/consensus/congress
   go mod download github.com/cespare/xxhash
   go clean -modcache
-  go env -w GO111MODULE=on
+  go env -w GO111MODULE=off
   go get github.com/ethereum/go-ethereum/core/txpool/legacypool
   go get github.com/ethereum/go-ethereum/core/txpool
   go get github.com/ethereum/go-ethereum/core/txpool/blobpool
