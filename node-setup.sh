@@ -77,6 +77,7 @@ task6(){
   cd node_src
   go mod download
   go get github.com/ethereum/go-ethereum/consensus/congress
+  go mod download github.com/cespare/xxhash
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
