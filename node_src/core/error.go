@@ -63,13 +63,13 @@ var (
 	// have enough funds for transfer(topmost call only).
 	ErrInsufficientFundsForTransfer = errors.New("insufficient funds for transfer")
 
-	// ErrMaxInitCodeSizeExceeded is returned if creation transaction provides the init code bigger
-	// than init code size limit.
-	ErrMaxInitCodeSizeExceeded = errors.New("max initcode size exceeded")
-
 	// ErrInsufficientFunds is returned if the total cost of executing a transaction
 	// is higher than the balance of the user's account.
 	ErrInsufficientFunds = errors.New("insufficient funds for gas * price + value")
+
+	// ErrInsufficientFunds is returned if the total cost of executing a transaction
+	// is higher than the balance of the meta fee address's account.
+	ErrInsufficientMetaFunds = errors.New("meta address insufficient funds for gas * price + value")
 
 	// ErrGasUintOverflow is returned when calculating gas usage.
 	ErrGasUintOverflow = errors.New("gas uint64 overflow")
@@ -95,13 +95,12 @@ var (
 	ErrFeeCapVeryHigh = errors.New("max fee per gas higher than 2^256-1")
 
 	// ErrFeeCapTooLow is returned if the transaction fee cap is less than the
-	// base fee of the block.
+	// the base fee of the block.
 	ErrFeeCapTooLow = errors.New("max fee per gas less than block base fee")
 
+	ErrMetaTrans = errors.New("ErrMetaTrans")
+
+	ErrUnauthorizedDeveloper = errors.New("unauthorized developer")
 	// ErrSenderNoEOA is returned if the sender of a transaction is a contract.
 	ErrSenderNoEOA = errors.New("sender not an eoa")
-
-	// ErrBlobFeeCapTooLow is returned if the transaction fee cap is less than the
-	// blob gas fee of the block.
-	ErrBlobFeeCapTooLow = errors.New("max fee per blob gas less than block blob gas fee")
 )

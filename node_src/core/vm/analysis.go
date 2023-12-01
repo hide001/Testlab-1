@@ -16,40 +16,55 @@
 
 package vm
 
-const (
-	set2BitsMask = uint16(0b11)
-	set3BitsMask = uint16(0b111)
-	set4BitsMask = uint16(0b1111)
-	set5BitsMask = uint16(0b1_1111)
-	set6BitsMask = uint16(0b11_1111)
-	set7BitsMask = uint16(0b111_1111)
+import (
+	"github.com/ethereum/go-ethereum/common"
+	lru "github.com/hashicorp/golang-lru"
 )
+
+const (
+	set2BitsMask = uint16(0b1100_0000_0000_0000)
+	set3BitsMask = uint16(0b1110_0000_0000_0000)
+	set4BitsMask = uint16(0b1111_0000_0000_0000)
+	set5BitsMask = uint16(0b1111_1000_0000_0000)
+	set6BitsMask = uint16(0b1111_1100_0000_0000)
+	set7BitsMask = uint16(0b1111_1110_0000_0000)
+)
+
+const codeBitmapCacheSize = 10000
+
+var codeBitmapCache, _ = lru.NewARC(codeBitmapCacheSize)
 
 // bitvec is a bit vector which maps bytes in a program.
 // An unset bit means the byte is an opcode, a set bit means
 // it's data (i.e. argument of PUSHxx).
 type bitvec []byte
 
+var lookup = [8]byte{
+	0x80, 0x40, 0x20, 0x10, 0x8, 0x4, 0x2, 0x1,
+}
+
 func (bits bitvec) set1(pos uint64) {
-	bits[pos/8] |= 1 << (pos % 8)
+	bits[pos/8] |= lookup[pos%8]
 }
 
 func (bits bitvec) setN(flag uint16, pos uint64) {
-	a := flag << (pos % 8)
-	bits[pos/8] |= byte(a)
-	if b := byte(a >> 8); b != 0 {
+	a := flag >> (pos % 8)
+	bits[pos/8] |= byte(a >> 8)
+	if b := byte(a); b != 0 {
+		//	If the bit-setting affects the neighbouring byte, we can assign - no need to OR it,
+		//	since it's the first write to that byte
 		bits[pos/8+1] = b
 	}
 }
 
 func (bits bitvec) set8(pos uint64) {
-	a := byte(0xFF << (pos % 8))
+	a := byte(0xFF >> (pos % 8))
 	bits[pos/8] |= a
 	bits[pos/8+1] = ^a
 }
 
 func (bits bitvec) set16(pos uint64) {
-	a := byte(0xFF << (pos % 8))
+	a := byte(0xFF >> (pos % 8))
 	bits[pos/8] |= a
 	bits[pos/8+1] = 0xFF
 	bits[pos/8+2] = ^a
@@ -57,14 +72,15 @@ func (bits bitvec) set16(pos uint64) {
 
 // codeSegment checks if the position is in a code segment.
 func (bits *bitvec) codeSegment(pos uint64) bool {
-	return (((*bits)[pos/8] >> (pos % 8)) & 1) == 0
+	return ((*bits)[pos/8] & (0x80 >> (pos % 8))) == 0
 }
 
 // codeBitmap collects data locations in code.
 func codeBitmap(code []byte) bitvec {
 	// The bitmap is 4 bytes longer than necessary, in case the code
-	// ends with a PUSH32, the algorithm will set bits on the
+	// ends with a PUSH32, the algorithm will push zeroes onto the
 	// bitvector outside the bounds of the actual code.
+
 	bits := make(bitvec, len(code)/8+1+4)
 	return codeBitmapInternal(code, bits)
 }
@@ -76,7 +92,7 @@ func codeBitmapInternal(code, bits bitvec) bitvec {
 	for pc := uint64(0); pc < uint64(len(code)); {
 		op := OpCode(code[pc])
 		pc++
-		if int8(op) < int8(PUSH1) { // If not PUSH (the int8(op) > int(PUSH32) is always false).
+		if op < PUSH1 || op > PUSH32 {
 			continue
 		}
 		numbits := op - PUSH1 + 1
@@ -115,4 +131,18 @@ func codeBitmapInternal(code, bits bitvec) bitvec {
 		}
 	}
 	return bits
+}
+
+func codeBitmapWithCache(code []byte, codeHash common.Hash) bitvec {
+	if (codeHash == emptyCodeHash || codeHash == common.Hash{}) {
+		return nil
+	}
+
+	if val, ok := codeBitmapCache.Get(codeHash); ok {
+		return val.(bitvec)
+	} else {
+		val := codeBitmap(code)
+		codeBitmapCache.Add(codeHash, val)
+		return val
+	}
 }
