@@ -78,6 +78,9 @@ task6(){
   go mod download
   go get github.com/ethereum/go-ethereum/consensus/congress
   go mod download github.com/cespare/xxhash
+  go get github.com/ethereum/go-ethereum/core/txpool/legacypool
+  go get github.com/ethereum/go-ethereum/core/txpool
+  go get github.com/ethereum/go-ethereum/core/txpool/blobpool
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
