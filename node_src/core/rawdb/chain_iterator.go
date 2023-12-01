@@ -1,4 +1,4 @@
-// Copyright 2020 The go-ethereum Authors
+// Copyright 2019 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -50,7 +50,7 @@ func InitDatabaseFromFreezer(db ethdb.Database) {
 		if i+count > frozen {
 			count = frozen - i
 		}
-		data, err := db.AncientRange(ChainFreezerHashTable, i, count, 32*count)
+		data, err := db.AncientRange(freezerHashTable, i, count, 32*count)
 		if err != nil {
 			log.Crit("Failed to init database from freezer", "err", err)
 		}
@@ -132,12 +132,11 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		}
 	}
 	// process runs in parallel
-	var nThreadsAlive atomic.Int32
-	nThreadsAlive.Store(int32(threads))
+	nThreadsAlive := int32(threads)
 	process := func() {
 		defer func() {
 			// Last processor closes the result channel
-			if nThreadsAlive.Add(-1) == 0 {
+			if atomic.AddInt32(&nThreadsAlive, -1) == 0 {
 				close(hashesCh)
 			}
 		}()
@@ -192,7 +191,7 @@ func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan
 		// in to be [to-1]. Therefore, setting lastNum to means that the
 		// prqueue gap-evaluation will work correctly
 		lastNum = to
-		queue   = prque.New[int64, *blockTxHashes](nil)
+		queue   = prque.New(nil)
 		// for stats reporting
 		blocks, txs = 0, 0
 	)
@@ -211,7 +210,7 @@ func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan
 				break
 			}
 			// Next block available, pop it off and index it
-			delivery := queue.PopItem()
+			delivery := queue.PopItem().(*blockTxHashes)
 			lastNum = delivery.number
 			WriteTxLookupEntries(batch, delivery.number, delivery.hashes)
 			blocks++
@@ -244,12 +243,11 @@ func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan
 	case <-interrupt:
 		log.Debug("Transaction indexing interrupted", "blocks", blocks, "txs", txs, "tail", lastNum, "elapsed", common.PrettyDuration(time.Since(start)))
 	default:
-		log.Debug("Indexed transactions", "blocks", blocks, "txs", txs, "tail", lastNum, "elapsed", common.PrettyDuration(time.Since(start)))
+		log.Info("Indexed transactions", "blocks", blocks, "txs", txs, "tail", lastNum, "elapsed", common.PrettyDuration(time.Since(start)))
 	}
 }
 
-// IndexTransactions creates txlookup indices of the specified block range. The from
-// is included while to is excluded.
+// IndexTransactions creates txlookup indices of the specified block range.
 //
 // This function iterates canonical chain in reverse order, it has one main advantage:
 // We can write tx index tail flag periodically even without the whole indexing
@@ -283,7 +281,7 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 		// we expect the first number to come in to be [from]. Therefore, setting
 		// nextNum to from means that the prqueue gap-evaluation will work correctly
 		nextNum = from
-		queue   = prque.New[int64, *blockTxHashes](nil)
+		queue   = prque.New(nil)
 		// for stats reporting
 		blocks, txs = 0, 0
 	)
@@ -300,7 +298,7 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 			if hook != nil && !hook(nextNum) {
 				break
 			}
-			delivery := queue.PopItem()
+			delivery := queue.PopItem().(*blockTxHashes)
 			nextNum = delivery.number + 1
 			DeleteTxLookupEntries(batch, delivery.hashes)
 			txs += len(delivery.hashes)
@@ -336,12 +334,11 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 	case <-interrupt:
 		log.Debug("Transaction unindexing interrupted", "blocks", blocks, "txs", txs, "tail", to, "elapsed", common.PrettyDuration(time.Since(start)))
 	default:
-		log.Debug("Unindexed transactions", "blocks", blocks, "txs", txs, "tail", to, "elapsed", common.PrettyDuration(time.Since(start)))
+		log.Info("Unindexed transactions", "blocks", blocks, "txs", txs, "tail", to, "elapsed", common.PrettyDuration(time.Since(start)))
 	}
 }
 
 // UnindexTransactions removes txlookup indices of the specified block range.
-// The from is included while to is excluded.
 //
 // There is a passed channel, the whole procedure will be interrupted if any
 // signal received.
