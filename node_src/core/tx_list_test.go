@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package legacypool
+package core
 
 import (
 	"math/big"
@@ -27,7 +27,7 @@ import (
 
 // Tests that transactions can be added to strict lists and list contents and
 // nonce boundaries are correctly maintained.
-func TestStrictListAdd(t *testing.T) {
+func TestStrictTxListAdd(t *testing.T) {
 	// Generate a list of transactions to insert
 	key, _ := crypto.GenerateKey()
 
@@ -36,9 +36,9 @@ func TestStrictListAdd(t *testing.T) {
 		txs[i] = transaction(uint64(i), 0, key)
 	}
 	// Insert the transactions in a random order
-	list := newList(true)
+	list := newTxList(true)
 	for _, v := range rand.Perm(len(txs)) {
-		list.Add(txs[v], DefaultConfig.PriceBump)
+		list.Add(txs[v], DefaultTxPoolConfig.PriceBump)
 	}
 	// Verify internal state
 	if len(list.txs.items) != len(txs) {
@@ -51,7 +51,7 @@ func TestStrictListAdd(t *testing.T) {
 	}
 }
 
-func BenchmarkListAdd(b *testing.B) {
+func BenchmarkTxListAdd(b *testing.B) {
 	// Generate a list of transactions to insert
 	key, _ := crypto.GenerateKey()
 
@@ -60,13 +60,13 @@ func BenchmarkListAdd(b *testing.B) {
 		txs[i] = transaction(uint64(i), 0, key)
 	}
 	// Insert the transactions in a random order
-	priceLimit := big.NewInt(int64(DefaultConfig.PriceLimit))
+	priceLimit := big.NewInt(int64(DefaultTxPoolConfig.PriceLimit))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		list := newList(true)
+		list := newTxList(true)
 		for _, v := range rand.Perm(len(txs)) {
-			list.Add(txs[v], DefaultConfig.PriceBump)
-			list.Filter(priceLimit, DefaultConfig.PriceBump)
+			list.Add(txs[v], DefaultTxPoolConfig.PriceBump)
+			list.Filter(priceLimit, DefaultTxPoolConfig.PriceBump)
 		}
 	}
 }

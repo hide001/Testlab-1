@@ -23,6 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/modern-go/reflect2"
 )
 
 // ChainContext supports retrieving headers and consensus parameters from the
@@ -31,7 +32,7 @@ type ChainContext interface {
 	// Engine retrieves the chain's consensus engine.
 	Engine() consensus.Engine
 
-	// GetHeader returns the header corresponding to the hash/number argument pair.
+	// GetHeader returns the hash corresponding to their hash.
 	GetHeader(common.Hash, uint64) *types.Header
 }
 
@@ -40,11 +41,10 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 	var (
 		beneficiary common.Address
 		baseFee     *big.Int
-		random      *common.Hash
 	)
 
 	// If we don't have an explicit author (i.e. not mining), extract from the header
-	if author == nil {
+	if author == nil && chain != nil {
 		beneficiary, _ = chain.Engine().Author(header) // Ignore error, we're past header validation
 	} else {
 		beneficiary = *author
@@ -52,30 +52,25 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 	if header.BaseFee != nil {
 		baseFee = new(big.Int).Set(header.BaseFee)
 	}
-	if header.Difficulty.Cmp(common.Big0) == 0 {
-		random = &header.MixDigest
-	}
 	return vm.BlockContext{
-		CanTransfer:   CanTransfer,
-		Transfer:      Transfer,
-		GetHash:       GetHashFn(header, chain),
-		Coinbase:      beneficiary,
-		BlockNumber:   new(big.Int).Set(header.Number),
-		Time:          header.Time,
-		Difficulty:    new(big.Int).Set(header.Difficulty),
-		BaseFee:       baseFee,
-		GasLimit:      header.GasLimit,
-		Random:        random,
-		ExcessBlobGas: header.ExcessBlobGas,
+		CanTransfer: CanTransfer,
+		Transfer:    Transfer,
+		GetHash:     GetHashFn(header, chain),
+		Coinbase:    beneficiary,
+		BlockNumber: new(big.Int).Set(header.Number),
+		Time:        new(big.Int).SetUint64(header.Time),
+		Difficulty:  new(big.Int).Set(header.Difficulty),
+		BaseFee:     baseFee,
+		GasLimit:    header.GasLimit,
+		CanCreate:   GetCanCreateFn(chain),
 	}
 }
 
 // NewEVMTxContext creates a new transaction context for a single transaction.
-func NewEVMTxContext(msg *Message) vm.TxContext {
+func NewEVMTxContext(msg Message) vm.TxContext {
 	return vm.TxContext{
-		Origin:     msg.From,
-		GasPrice:   new(big.Int).Set(msg.GasPrice),
-		BlobHashes: msg.BlobHashes,
+		Origin:   msg.From(),
+		GasPrice: new(big.Int).Set(msg.GasPrice()),
 	}
 }
 
@@ -86,11 +81,6 @@ func GetHashFn(ref *types.Header, chain ChainContext) func(n uint64) common.Hash
 	var cache []common.Hash
 
 	return func(n uint64) common.Hash {
-		if ref.Number.Uint64() <= n {
-			// This situation can happen if we're doing tracing and using
-			// block overrides.
-			return common.Hash{}
-		}
 		// If there's no hash cache yet, make one
 		if len(cache) == 0 {
 			cache = append(cache, ref.ParentHash)
@@ -128,4 +118,21 @@ func CanTransfer(db vm.StateDB, addr common.Address, amount *big.Int) bool {
 func Transfer(db vm.StateDB, sender, recipient common.Address, amount *big.Int) {
 	db.SubBalance(sender, amount)
 	db.AddBalance(recipient, amount)
+}
+
+func GetCanCreateFn(chain ChainContext) vm.CanCreateFunc {
+	if reflect2.IsNil(chain) || chain.Engine() == nil {
+		return func(db vm.StateDB, address common.Address, height *big.Int) bool {
+			return true
+		}
+	}
+	posa, isPoSA := chain.Engine().(consensus.PoSA)
+	if isPoSA {
+		return func(db vm.StateDB, address common.Address, height *big.Int) bool {
+			return posa.CanCreate(db, address, height)
+		}
+	}
+	return func(db vm.StateDB, address common.Address, height *big.Int) bool {
+		return true
+	}
 }

@@ -18,6 +18,7 @@ package rawdb
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -33,7 +34,7 @@ type freezerBatch struct {
 	tables map[string]*freezerTableBatch
 }
 
-func newFreezerBatch(f *Freezer) *freezerBatch {
+func newFreezerBatch(f *freezer) *freezerBatch {
 	batch := &freezerBatch{tables: make(map[string]*freezerTableBatch, len(f.tables))}
 	for kind, table := range f.tables {
 		batch.tables[kind] = table.newBatch()
@@ -106,7 +107,7 @@ func (t *freezerTable) newBatch() *freezerTableBatch {
 func (batch *freezerTableBatch) reset() {
 	batch.dataBuffer = batch.dataBuffer[:0]
 	batch.indexBuffer = batch.indexBuffer[:0]
-	batch.curItem = batch.t.items.Load()
+	batch.curItem = atomic.LoadUint64(&batch.t.items)
 	batch.totalBytes = 0
 }
 
@@ -190,7 +191,7 @@ func (batch *freezerTableBatch) commit() error {
 	dataSize := int64(len(batch.dataBuffer))
 	batch.dataBuffer = batch.dataBuffer[:0]
 
-	// Write indices.
+	// Write index.
 	_, err = batch.t.index.Write(batch.indexBuffer)
 	if err != nil {
 		return err
@@ -200,7 +201,7 @@ func (batch *freezerTableBatch) commit() error {
 
 	// Update headBytes of table.
 	batch.t.headBytes += dataSize
-	batch.t.items.Store(batch.curItem)
+	atomic.StoreUint64(&batch.t.items, batch.curItem)
 
 	// Update metrics.
 	batch.t.sizeGauge.Inc(dataSize + indexSize)

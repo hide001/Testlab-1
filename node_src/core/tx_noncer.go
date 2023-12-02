@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
-package legacypool
+package core
 
 import (
 	"sync"
@@ -23,18 +23,18 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 )
 
-// noncer is a tiny virtual state database to manage the executable nonces of
+// txNoncer is a tiny virtual state database to manage the executable nonces of
 // accounts in the pool, falling back to reading from a real state database if
 // an account is unknown.
-type noncer struct {
+type txNoncer struct {
 	fallback *state.StateDB
 	nonces   map[common.Address]uint64
 	lock     sync.Mutex
 }
 
-// newNoncer creates a new virtual state database to track the pool nonces.
-func newNoncer(statedb *state.StateDB) *noncer {
-	return &noncer{
+// newTxNoncer creates a new virtual state database to track the pool nonces.
+func newTxNoncer(statedb *state.StateDB) *txNoncer {
+	return &txNoncer{
 		fallback: statedb.Copy(),
 		nonces:   make(map[common.Address]uint64),
 	}
@@ -42,23 +42,21 @@ func newNoncer(statedb *state.StateDB) *noncer {
 
 // get returns the current nonce of an account, falling back to a real state
 // database if the account is unknown.
-func (txn *noncer) get(addr common.Address) uint64 {
+func (txn *txNoncer) get(addr common.Address) uint64 {
 	// We use mutex for get operation is the underlying
 	// state will mutate db even for read access.
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
-		}
+		txn.nonces[addr] = txn.fallback.GetNonce(addr)
 	}
 	return txn.nonces[addr]
 }
 
 // set inserts a new virtual nonce into the virtual state database to be returned
 // whenever the pool requests it instead of reaching into the real state database.
-func (txn *noncer) set(addr common.Address, nonce uint64) {
+func (txn *txNoncer) set(addr common.Address, nonce uint64) {
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 
@@ -66,15 +64,13 @@ func (txn *noncer) set(addr common.Address, nonce uint64) {
 }
 
 // setIfLower updates a new virtual nonce into the virtual state database if the
-// new one is lower.
-func (txn *noncer) setIfLower(addr common.Address, nonce uint64) {
+// the new one is lower.
+func (txn *txNoncer) setIfLower(addr common.Address, nonce uint64) {
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 
 	if _, ok := txn.nonces[addr]; !ok {
-		if nonce := txn.fallback.GetNonce(addr); nonce != 0 {
-			txn.nonces[addr] = nonce
-		}
+		txn.nonces[addr] = txn.fallback.GetNonce(addr)
 	}
 	if txn.nonces[addr] <= nonce {
 		return
@@ -83,7 +79,7 @@ func (txn *noncer) setIfLower(addr common.Address, nonce uint64) {
 }
 
 // setAll sets the nonces for all accounts to the given map.
-func (txn *noncer) setAll(all map[common.Address]uint64) {
+func (txn *txNoncer) setAll(all map[common.Address]uint64) {
 	txn.lock.Lock()
 	defer txn.lock.Unlock()
 
