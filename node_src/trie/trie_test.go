@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"hash"
-	"io"
 	"math/big"
 	"math/rand"
 	"reflect"
@@ -46,7 +45,7 @@ func init() {
 }
 
 func TestEmptyTrie(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	res := trie.Hash()
 	exp := types.EmptyRootHash
 	if res != exp {
@@ -55,7 +54,7 @@ func TestEmptyTrie(t *testing.T) {
 }
 
 func TestNull(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	key := make([]byte, 32)
 	value := []byte("test")
 	trie.MustUpdate(key, value)
@@ -65,13 +64,8 @@ func TestNull(t *testing.T) {
 }
 
 func TestMissingRoot(t *testing.T) {
-	testMissingRoot(t, rawdb.HashScheme)
-	testMissingRoot(t, rawdb.PathScheme)
-}
-
-func testMissingRoot(t *testing.T, scheme string) {
 	root := common.HexToHash("0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33")
-	trie, err := New(TrieID(root), newTestDatabase(rawdb.NewMemoryDatabase(), scheme))
+	trie, err := New(TrieID(root), NewDatabase(rawdb.NewMemoryDatabase()))
 	if trie != nil {
 		t.Error("New returned non-nil trie for invalid root")
 	}
@@ -167,7 +161,7 @@ func testMissingNode(t *testing.T, memonly bool, scheme string) {
 }
 
 func TestInsert(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 
 	updateString(trie, "doe", "reindeer")
 	updateString(trie, "dog", "puppy")
@@ -179,7 +173,7 @@ func TestInsert(t *testing.T) {
 		t.Errorf("case 1: exp %x got %x", exp, root)
 	}
 
-	trie = NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie = NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	updateString(trie, "A", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	exp = common.HexToHash("d23786fb4a010da3ce639d66d5e904a11dbc02746d1ce25029e53290cabf28ab")
@@ -190,7 +184,7 @@ func TestInsert(t *testing.T) {
 }
 
 func TestGet(t *testing.T) {
-	db := NewDatabase(rawdb.NewMemoryDatabase(), nil)
+	db := NewDatabase(rawdb.NewMemoryDatabase())
 	trie := NewEmpty(db)
 	updateString(trie, "doe", "reindeer")
 	updateString(trie, "dog", "puppy")
@@ -215,7 +209,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	vals := []struct{ k, v string }{
 		{"do", "verb"},
 		{"ether", "wookiedoo"},
@@ -242,7 +236,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestEmptyValues(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 
 	vals := []struct{ k, v string }{
 		{"do", "verb"},
@@ -266,7 +260,7 @@ func TestEmptyValues(t *testing.T) {
 }
 
 func TestReplication(t *testing.T) {
-	db := NewDatabase(rawdb.NewMemoryDatabase(), nil)
+	db := NewDatabase(rawdb.NewMemoryDatabase())
 	trie := NewEmpty(db)
 	vals := []struct{ k, v string }{
 		{"do", "verb"},
@@ -327,7 +321,7 @@ func TestReplication(t *testing.T) {
 }
 
 func TestLargeValue(t *testing.T) {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	trie.MustUpdate([]byte("key1"), []byte{99, 99, 99, 99})
 	trie.MustUpdate([]byte("key2"), bytes.Repeat([]byte{1}, 32))
 	trie.Hash()
@@ -363,17 +357,12 @@ func TestRandomCases(t *testing.T) {
 		{op: 1, key: common.Hex2Bytes("980c393656413a15c8da01978ed9f89feb80b502f58f2d640e3a2f5f7a99a7018f1b573befd92053ac6f78fca4a87268"), value: common.Hex2Bytes("")}, // step 24
 		{op: 1, key: common.Hex2Bytes("fd"), value: common.Hex2Bytes("")},                                                                                               // step 25
 	}
-	if err := runRandTest(rt); err != nil {
-		t.Fatal(err)
-	}
+	runRandTest(rt)
 }
 
 // randTest performs random trie operations.
 // Instances of this test are created by Generate.
 type randTest []randTestStep
-
-// compile-time interface check
-var _ quick.Generator = (randTest)(nil)
 
 type randTestStep struct {
 	op    int
@@ -395,45 +384,33 @@ const (
 )
 
 func (randTest) Generate(r *rand.Rand, size int) reflect.Value {
-	var finishedFn = func() bool {
-		size--
-		return size == 0
-	}
-	return reflect.ValueOf(generateSteps(finishedFn, r))
-}
-
-func generateSteps(finished func() bool, r io.Reader) randTest {
 	var allKeys [][]byte
-	var one = []byte{0}
 	genKey := func() []byte {
-		r.Read(one)
-		if len(allKeys) < 2 || one[0]%100 > 90 {
+		if len(allKeys) < 2 || r.Intn(100) < 10 {
 			// new key
-			size := one[0] % 50
-			key := make([]byte, size)
+			key := make([]byte, r.Intn(50))
 			r.Read(key)
 			allKeys = append(allKeys, key)
 			return key
 		}
 		// use existing key
-		idx := int(one[0]) % len(allKeys)
-		return allKeys[idx]
+		return allKeys[r.Intn(len(allKeys))]
 	}
+
 	var steps randTest
-	for !finished() {
-		r.Read(one)
-		step := randTestStep{op: int(one[0]) % opMax}
+	for i := 0; i < size; i++ {
+		step := randTestStep{op: r.Intn(opMax)}
 		switch step.op {
 		case opUpdate:
 			step.key = genKey()
 			step.value = make([]byte, 8)
-			binary.BigEndian.PutUint64(step.value, uint64(len(steps)))
+			binary.BigEndian.PutUint64(step.value, uint64(i))
 		case opGet, opDelete, opProve:
 			step.key = genKey()
 		}
 		steps = append(steps, step)
 	}
-	return steps
+	return reflect.ValueOf(steps)
 }
 
 func verifyAccessList(old *Trie, new *Trie, set *trienode.NodeSet) error {
@@ -478,12 +455,7 @@ func verifyAccessList(old *Trie, new *Trie, set *trienode.NodeSet) error {
 	return nil
 }
 
-// runRandTestBool coerces error to boolean, for use in quick.Check
-func runRandTestBool(rt randTest) bool {
-	return runRandTest(rt) == nil
-}
-
-func runRandTest(rt randTest) error {
+func runRandTest(rt randTest) bool {
 	var scheme = rawdb.HashScheme
 	if rand.Intn(2) == 0 {
 		scheme = rawdb.PathScheme
@@ -536,12 +508,12 @@ func runRandTest(rt randTest) error {
 			newtr, err := New(TrieID(root), triedb)
 			if err != nil {
 				rt[i].err = err
-				return err
+				return false
 			}
 			if nodes != nil {
 				if err := verifyAccessList(origTrie, newtr, nodes); err != nil {
 					rt[i].err = err
-					return err
+					return false
 				}
 			}
 			tr = newtr
@@ -610,14 +582,14 @@ func runRandTest(rt randTest) error {
 		}
 		// Abort the test on error.
 		if rt[i].err != nil {
-			return rt[i].err
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 func TestRandom(t *testing.T) {
-	if err := quick.Check(runRandTestBool, nil); err != nil {
+	if err := quick.Check(runRandTest, nil); err != nil {
 		if cerr, ok := err.(*quick.CheckError); ok {
 			t.Fatalf("random test iteration %d failed: %s", cerr.Count, spew.Sdump(cerr.In))
 		}
@@ -632,14 +604,12 @@ func BenchmarkUpdateLE(b *testing.B) { benchUpdate(b, binary.LittleEndian) }
 const benchElemCount = 20000
 
 func benchGet(b *testing.B) {
-	triedb := NewDatabase(rawdb.NewMemoryDatabase(), nil)
+	triedb := NewDatabase(rawdb.NewMemoryDatabase())
 	trie := NewEmpty(triedb)
 	k := make([]byte, 32)
 	for i := 0; i < benchElemCount; i++ {
 		binary.LittleEndian.PutUint64(k, uint64(i))
-		v := make([]byte, 32)
-		binary.LittleEndian.PutUint64(v, uint64(i))
-		trie.MustUpdate(k, v)
+		trie.MustUpdate(k, k)
 	}
 	binary.LittleEndian.PutUint64(k, benchElemCount/2)
 
@@ -651,14 +621,12 @@ func benchGet(b *testing.B) {
 }
 
 func benchUpdate(b *testing.B, e binary.ByteOrder) *Trie {
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	k := make([]byte, 32)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		v := make([]byte, 32)
 		e.PutUint64(k, uint64(i))
-		e.PutUint64(v, uint64(i))
-		trie.MustUpdate(k, v)
+		trie.MustUpdate(k, k)
 	}
 	return trie
 }
@@ -683,7 +651,7 @@ func BenchmarkHash(b *testing.B) {
 	// entries, then adding N more.
 	addresses, accounts := makeAccounts(2 * b.N)
 	// Insert the accounts into the trie and hash it
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	i := 0
 	for ; i < len(addresses)/2; i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
@@ -714,7 +682,7 @@ func BenchmarkCommitAfterHash(b *testing.B) {
 func benchmarkCommitAfterHash(b *testing.B, collectLeaf bool) {
 	// Make the random benchmark deterministic
 	addresses, accounts := makeAccounts(b.N)
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	for i := 0; i < len(addresses); i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
 	}
@@ -728,7 +696,7 @@ func benchmarkCommitAfterHash(b *testing.B, collectLeaf bool) {
 func TestTinyTrie(t *testing.T) {
 	// Create a realistic account trie to hash
 	_, accounts := makeAccounts(5)
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	trie.MustUpdate(common.Hex2Bytes("0000000000000000000000000000000000000000000000000000000000001337"), accounts[3])
 	if exp, root := common.HexToHash("8c6a85a4d9fda98feff88450299e574e5378e32391f75a055d470ac0653f1005"), trie.Hash(); exp != root {
 		t.Errorf("1: got %x, exp %x", root, exp)
@@ -741,7 +709,7 @@ func TestTinyTrie(t *testing.T) {
 	if exp, root := common.HexToHash("0608c1d1dc3905fa22204c7a0e43644831c3b6d3def0f274be623a948197e64a"), trie.Hash(); exp != root {
 		t.Errorf("3: got %x, exp %x", root, exp)
 	}
-	checktr := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	checktr := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	it := NewIterator(trie.MustNodeIterator(nil))
 	for it.Next() {
 		checktr.MustUpdate(it.Key, it.Value)
@@ -754,7 +722,7 @@ func TestTinyTrie(t *testing.T) {
 func TestCommitAfterHash(t *testing.T) {
 	// Create a realistic account trie to hash
 	addresses, accounts := makeAccounts(1000)
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	for i := 0; i < len(addresses); i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
 	}
@@ -820,17 +788,11 @@ func (s *spongeDb) Stat(property string) (string, error)     { panic("implement 
 func (s *spongeDb) Compact(start []byte, limit []byte) error { panic("implement me") }
 func (s *spongeDb) Close() error                             { return nil }
 func (s *spongeDb) Put(key []byte, value []byte) error {
-	var (
-		keybrief = key
-		valbrief = value
-	)
-	if len(keybrief) > 8 {
-		keybrief = keybrief[:8]
-	}
+	valbrief := value
 	if len(valbrief) > 8 {
 		valbrief = valbrief[:8]
 	}
-	s.journal = append(s.journal, fmt.Sprintf("%v: PUT([%x...], [%d bytes] %x...)\n", s.id, keybrief, len(value), valbrief))
+	s.journal = append(s.journal, fmt.Sprintf("%v: PUT([%x...], [%d bytes] %x...)\n", s.id, key[:8], len(value), valbrief))
 	s.sponge.Write(key)
 	s.sponge.Write(value)
 	return nil
@@ -868,7 +830,7 @@ func TestCommitSequence(t *testing.T) {
 		addresses, accounts := makeAccounts(tc.count)
 		// This spongeDb is used to check the sequence of disk-db-writes
 		s := &spongeDb{sponge: sha3.NewLegacyKeccak256()}
-		db := NewDatabase(rawdb.NewDatabase(s), nil)
+		db := NewDatabase(rawdb.NewDatabase(s))
 		trie := NewEmpty(db)
 		// Fill the trie with elements
 		for i := 0; i < tc.count; i++ {
@@ -899,7 +861,7 @@ func TestCommitSequenceRandomBlobs(t *testing.T) {
 		prng := rand.New(rand.NewSource(int64(i)))
 		// This spongeDb is used to check the sequence of disk-db-writes
 		s := &spongeDb{sponge: sha3.NewLegacyKeccak256()}
-		db := NewDatabase(rawdb.NewDatabase(s), nil)
+		db := NewDatabase(rawdb.NewDatabase(s))
 		trie := NewEmpty(db)
 		// Fill the trie with elements
 		for i := 0; i < tc.count; i++ {
@@ -931,16 +893,13 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 		prng := rand.New(rand.NewSource(int64(count)))
 		// This spongeDb is used to check the sequence of disk-db-writes
 		s := &spongeDb{sponge: sha3.NewLegacyKeccak256(), id: "a"}
-		db := NewDatabase(rawdb.NewDatabase(s), nil)
+		db := NewDatabase(rawdb.NewDatabase(s))
 		trie := NewEmpty(db)
 		// Another sponge is used for the stacktrie commits
 		stackTrieSponge := &spongeDb{sponge: sha3.NewLegacyKeccak256(), id: "b"}
-
-		options := NewStackTrieOptions()
-		options = options.WithWriter(func(path []byte, hash common.Hash, blob []byte) {
-			rawdb.WriteTrieNode(stackTrieSponge, common.Hash{}, path, hash, blob, db.Scheme())
+		stTrie := NewStackTrie(func(owner common.Hash, path []byte, hash common.Hash, blob []byte) {
+			rawdb.WriteTrieNode(stackTrieSponge, owner, path, hash, blob, db.Scheme())
 		})
-		stTrie := NewStackTrie(options)
 		// Fill the trie with elements
 		for i := 0; i < count; i++ {
 			// For the stack trie, we need to do inserts in proper order
@@ -963,7 +922,10 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 		db.Update(root, types.EmptyRootHash, 0, trienode.NewWithNodeSet(nodes), nil)
 		db.Commit(root, false)
 		// And flush stacktrie -> disk
-		stRoot := stTrie.Commit()
+		stRoot, err := stTrie.Commit()
+		if err != nil {
+			t.Fatalf("Failed to commit stack trie %v", err)
+		}
 		if stRoot != root {
 			t.Fatalf("root wrong, got %x exp %x", stRoot, root)
 		}
@@ -990,16 +952,13 @@ func TestCommitSequenceStackTrie(t *testing.T) {
 // not fit into 32 bytes, rlp-encoded. However, it's still the correct thing to do.
 func TestCommitSequenceSmallRoot(t *testing.T) {
 	s := &spongeDb{sponge: sha3.NewLegacyKeccak256(), id: "a"}
-	db := NewDatabase(rawdb.NewDatabase(s), nil)
+	db := NewDatabase(rawdb.NewDatabase(s))
 	trie := NewEmpty(db)
 	// Another sponge is used for the stacktrie commits
 	stackTrieSponge := &spongeDb{sponge: sha3.NewLegacyKeccak256(), id: "b"}
-
-	options := NewStackTrieOptions()
-	options = options.WithWriter(func(path []byte, hash common.Hash, blob []byte) {
-		rawdb.WriteTrieNode(stackTrieSponge, common.Hash{}, path, hash, blob, db.Scheme())
+	stTrie := NewStackTrie(func(owner common.Hash, path []byte, hash common.Hash, blob []byte) {
+		rawdb.WriteTrieNode(stackTrieSponge, owner, path, hash, blob, db.Scheme())
 	})
-	stTrie := NewStackTrie(options)
 	// Add a single small-element to the trie(s)
 	key := make([]byte, 5)
 	key[0] = 1
@@ -1011,7 +970,10 @@ func TestCommitSequenceSmallRoot(t *testing.T) {
 	db.Update(root, types.EmptyRootHash, 0, trienode.NewWithNodeSet(nodes), nil)
 	db.Commit(root, false)
 	// And flush stacktrie -> disk
-	stRoot := stTrie.Commit()
+	stRoot, err := stTrie.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit stack trie %v", err)
+	}
 	if stRoot != root {
 		t.Fatalf("root wrong, got %x exp %x", stRoot, root)
 	}
@@ -1067,7 +1029,7 @@ func BenchmarkHashFixedSize(b *testing.B) {
 
 func benchmarkHashFixedSize(b *testing.B, addresses [][20]byte, accounts [][]byte) {
 	b.ReportAllocs()
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	for i := 0; i < len(addresses); i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
 	}
@@ -1118,7 +1080,7 @@ func BenchmarkCommitAfterHashFixedSize(b *testing.B) {
 
 func benchmarkCommitAfterHashFixedSize(b *testing.B, addresses [][20]byte, accounts [][]byte) {
 	b.ReportAllocs()
-	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase(), nil))
+	trie := NewEmpty(NewDatabase(rawdb.NewMemoryDatabase()))
 	for i := 0; i < len(addresses); i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
 	}
@@ -1170,7 +1132,7 @@ func BenchmarkDerefRootFixedSize(b *testing.B) {
 
 func benchmarkDerefRootFixedSize(b *testing.B, addresses [][20]byte, accounts [][]byte) {
 	b.ReportAllocs()
-	triedb := NewDatabase(rawdb.NewMemoryDatabase(), nil)
+	triedb := NewDatabase(rawdb.NewMemoryDatabase())
 	trie := NewEmpty(triedb)
 	for i := 0; i < len(addresses); i++ {
 		trie.MustUpdate(crypto.Keccak256(addresses[i][:]), accounts[i])
@@ -1207,18 +1169,4 @@ func TestDecodeNode(t *testing.T) {
 		prng.Read(elems)
 		decodeNode(hash, elems)
 	}
-}
-
-func FuzzTrie(f *testing.F) {
-	f.Fuzz(func(t *testing.T, data []byte) {
-		var steps = 500
-		var input = bytes.NewReader(data)
-		var finishedFn = func() bool {
-			steps--
-			return steps < 0 || input.Len() == 0
-		}
-		if err := runRandTest(generateSteps(finishedFn, input)); err != nil {
-			t.Fatal(err)
-		}
-	})
 }

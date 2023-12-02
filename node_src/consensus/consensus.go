@@ -23,8 +23,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+)
+
+var (
+	FeeRecoder = common.HexToAddress("0xffffffffffffffffffffffffffffffffffffffff")
 )
 
 // ChainHeaderReader defines a small collection of methods needed to access the local
@@ -44,9 +49,6 @@ type ChainHeaderReader interface {
 
 	// GetHeaderByHash retrieves a block header from the database by its hash.
 	GetHeaderByHash(hash common.Hash) *types.Header
-
-	// GetTd retrieves the total difficulty from the database by hash and number.
-	GetTd(hash common.Hash, number uint64) *big.Int
 }
 
 // ChainReader defines a small collection of methods needed to access the local
@@ -66,14 +68,15 @@ type Engine interface {
 	Author(header *types.Header) (common.Address, error)
 
 	// VerifyHeader checks whether a header conforms to the consensus rules of a
-	// given engine.
-	VerifyHeader(chain ChainHeaderReader, header *types.Header) error
+	// given engine. Verifying the seal may be done optionally here, or explicitly
+	// via the VerifySeal method.
+	VerifyHeader(chain ChainHeaderReader, header *types.Header, seal bool) error
 
 	// VerifyHeaders is similar to VerifyHeader, but verifies a batch of headers
 	// concurrently. The method returns a quit channel to abort the operations and
 	// a results channel to retrieve the async verifications (the order is that of
 	// the input slice).
-	VerifyHeaders(chain ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error)
+	VerifyHeaders(chain ChainHeaderReader, headers []*types.Header, seals []bool) (chan<- struct{}, <-chan error)
 
 	// VerifyUncles verifies that the given block's uncles conform to the consensus
 	// rules of a given engine.
@@ -83,21 +86,21 @@ type Engine interface {
 	// rules of a particular engine. The changes are executed inline.
 	Prepare(chain ChainHeaderReader, header *types.Header) error
 
-	// Finalize runs any post-transaction state modifications (e.g. block rewards
-	// or process withdrawals) but does not assemble the block.
+	// Finalize runs any post-transaction state modifications (e.g. block rewards)
+	// but does not assemble the block.
 	//
-	// Note: The state database might be updated to reflect any consensus rules
-	// that happen at finalization (e.g. block rewards).
-	Finalize(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,
-		uncles []*types.Header, withdrawals []*types.Withdrawal)
+	// Note: The block header and state database might be updated to reflect any
+	// consensus rules that happen at finalization (e.g. block rewards).
+	Finalize(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction,
+		uncles []*types.Header, receipts *[]*types.Receipt, systemTxs []*types.Transaction) error
 
 	// FinalizeAndAssemble runs any post-transaction state modifications (e.g. block
-	// rewards or process withdrawals) and assembles the final block.
+	// rewards) and assembles the final block.
 	//
 	// Note: The block header and state database might be updated to reflect any
 	// consensus rules that happen at finalization (e.g. block rewards).
 	FinalizeAndAssemble(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,
-		uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, error)
+		uncles []*types.Header, receipts []*types.Receipt) (*types.Block, []*types.Receipt, error)
 
 	// Seal generates a new sealing request for the given input block and pushes
 	// the result into the given channel.
@@ -126,4 +129,37 @@ type PoW interface {
 
 	// Hashrate returns the current mining hashrate of a PoW consensus engine.
 	Hashrate() float64
+}
+
+// PoSA is a consensus engine based on proof-of-stake-authority.
+type PoSA interface {
+	Engine
+
+	// PreHandle runs any pre-transaction state modifications (e.g. apply hard fork rules).
+	//
+	// Note: The block header and state database might be updated to reflect any
+	// consensus rules that happen at pre-handling.
+	PreHandle(chain ChainHeaderReader, header *types.Header, state *state.StateDB) error
+
+	// IsSysTransaction checks whether a specific transaction is a system transaction.
+	IsSysTransaction(sender common.Address, tx *types.Transaction, header *types.Header) (bool, error)
+
+	// CanCreate determines where a given address can create a new contract.
+	CanCreate(state StateReader, addr common.Address, height *big.Int) bool
+
+	// ValidateTx do a consensus-related validation on the given transaction at the given header and state.
+	ValidateTx(sender common.Address, tx *types.Transaction, header *types.Header, parentState *state.StateDB) error
+
+	// CreateEvmExtraValidator returns a EvmExtraValidator if necessary.
+	CreateEvmExtraValidator(header *types.Header, parentState *state.StateDB) types.EvmExtraValidator
+
+	//Methods for debug trace
+
+	// ApplySysTx applies a system-transaction using a given evm,
+	// the main purpose of this method is for tracing a system-transaction.
+	ApplySysTx(evm *vm.EVM, state *state.StateDB, txIndex int, sender common.Address, tx *types.Transaction) (ret []byte, vmerr error, err error)
+}
+
+type StateReader interface {
+	GetState(addr common.Address, hash common.Hash) common.Hash
 }

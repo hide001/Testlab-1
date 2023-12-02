@@ -56,7 +56,7 @@ task4(){
       echo -e '\nbash /root/core-blockchain/node-start.sh --rpc' >>/etc/profile
   fi
   export PATH=$PATH:/usr/local/go/bin
-  go env -w GO111MODULE=on
+  go env -w GO111MODULE=off
   echo -e "\n${GREEN}[TASK 4 PASSED]${NC}\n"
 }
 
@@ -75,14 +75,14 @@ task6(){
   # do make all TASK 6
   echo -e "\n${ORANGE}TASK: ${GREEN}[Building Backend]${NC}\n"
   cd node_src
-  go mod download
-  go get github.com/ethereum/go-ethereum/consensus/congress
-  go mod download github.com/cespare/xxhash
-  go clean -modcache
-  go env -w GO111MODULE=off
-  go get github.com/ethereum/go-ethereum/core/txpool/legacypool
-  go get github.com/ethereum/go-ethereum/core/txpool
-  go get github.com/ethereum/go-ethereum/core/txpool/blobpool
+  # go mod download
+  # go get github.com/ethereum/go-ethereum/consensus/congress
+  # go mod download github.com/cespare/xxhash
+  # go clean -modcache
+  # go env -w GO111MODULE=off
+  # go get github.com/ethereum/go-ethereum/core/txpool/legacypool
+  # go get github.com/ethereum/go-ethereum/core/txpool
+  # go get github.com/ethereum/go-ethereum/core/txpool/blobpool
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }

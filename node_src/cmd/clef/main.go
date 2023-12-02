@@ -57,7 +57,6 @@ import (
 	"github.com/mattn/go-colorable"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
-	"golang.org/x/exp/slog"
 )
 
 const legalWarning = `
@@ -493,7 +492,7 @@ func initialize(c *cli.Context) error {
 	if usecolor {
 		output = colorable.NewColorable(logOutput)
 	}
-	log.SetDefault(log.NewLogger(log.NewTerminalHandlerWithLevel(output, slog.Level(c.Int(logLevelFlag.Name)), usecolor)))
+	log.Root().SetHandler(log.LvlFilterHandler(log.Lvl(c.Int(logLevelFlag.Name)), log.StreamHandler(output, log.TerminalFormat(usecolor))))
 
 	return nil
 }
@@ -582,7 +581,6 @@ func accountImport(c *cli.Context) error {
 		return err
 	}
 	if first != second {
-		//lint:ignore ST1005 This is a message for the user
 		return errors.New("Passwords do not match")
 	}
 	acc, err := internalApi.ImportRawKey(hex.EncodeToString(crypto.FromECDSA(pKey)), first)
@@ -1208,7 +1206,7 @@ func GenDoc(ctx *cli.Context) error {
 						URL:     accounts.URL{Path: ".. ignored .."},
 					},
 					{
-						Address: common.MaxAddress,
+						Address: common.HexToAddress("0xffffffffffffffffffffffffffffffffffffffff"),
 					},
 				}})
 	}

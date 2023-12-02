@@ -28,8 +28,8 @@ import (
 func TestFeeHistory(t *testing.T) {
 	var cases = []struct {
 		pending             bool
-		maxHeader, maxBlock uint64
-		count               uint64
+		maxHeader, maxBlock int
+		count               int
 		last                rpc.BlockNumber
 		percent             []float64
 		expFirst            uint64
@@ -50,8 +50,6 @@ func TestFeeHistory(t *testing.T) {
 		{false, 1000, 1000, 2, rpc.PendingBlockNumber, nil, 32, 1, nil},
 		{true, 1000, 1000, 2, rpc.PendingBlockNumber, nil, 32, 2, nil},
 		{true, 1000, 1000, 2, rpc.PendingBlockNumber, []float64{0, 10}, 32, 2, nil},
-		{false, 1000, 1000, 2, rpc.FinalizedBlockNumber, []float64{0, 10}, 24, 2, nil},
-		{false, 1000, 1000, 2, rpc.SafeBlockNumber, []float64{0, 10}, 24, 2, nil},
 	}
 	for i, c := range cases {
 		config := Config{
@@ -62,7 +60,7 @@ func TestFeeHistory(t *testing.T) {
 		oracle := NewOracle(backend, config)
 
 		first, reward, baseFee, ratio, err := oracle.FeeHistory(context.Background(), c.count, c.last, c.percent)
-		backend.teardown()
+
 		expReward := c.expCount
 		if len(c.percent) == 0 {
 			expReward = 0
