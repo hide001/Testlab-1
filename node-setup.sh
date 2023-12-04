@@ -78,18 +78,18 @@ task6(){
   # go mod download
   # go get github.com/ethereum/go-ethereum/consensus/congress
   # go mod download github.com/cespare/xxhash
-  go clean -modcache
+  # go clean -modcache
   # go env -w GO111MODULE=off
   # go get github.com/ethereum/go-ethereum/core/txpool/legacypool
   # go get github.com/ethereum/go-ethereum/core/txpool
   # go get github.com/ethereum/go-ethereum/core/txpool/blobpool
 
 
-  go get github.com/ethereum/go-ethereum/consensus/congress/systemcontract
-  go get github.com/ethereum/go-ethereum/consensus/congress/vmcaller
-  go get github.com/ethereum/go-ethereum/consensus/clique
+  # go get github.com/ethereum/go-ethereum/consensus/congress/systemcontract
+  # go get github.com/ethereum/go-ethereum/consensus/congress/vmcaller
+  # go get github.com/ethereum/go-ethereum/consensus/clique
 
-  go env -w GO111MODULE=on
+  # go env -w GO111MODULE=on
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
