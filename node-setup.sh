@@ -83,6 +83,11 @@ task6(){
   # go get github.com/ethereum/go-ethereum/core/txpool/legacypool
   # go get github.com/ethereum/go-ethereum/core/txpool
   # go get github.com/ethereum/go-ethereum/core/txpool/blobpool
+
+
+  go get github.com/ethereum/go-ethereum/consensus/congress/systemcontract
+  go get github.com/ethereum/go-ethereum/consensus/congress/vmcaller
+  go get github.com/ethereum/go-ethereum/consensus/clique
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
