@@ -17,149 +17,168 @@
 package trie
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/gob"
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/ethereum/go-ethereum/rlp"
 )
 
-var (
-	stPool = sync.Pool{New: func() any { return new(stNode) }}
-	_      = types.TrieHasher((*StackTrie)(nil))
-)
+var ErrCommitDisabled = errors.New("no database for committing")
 
-// StackTrieOptions contains the configured options for manipulating the stackTrie.
-type StackTrieOptions struct {
-	Writer  func(path []byte, hash common.Hash, blob []byte) // The function to commit the dirty nodes
-	Cleaner func(path []byte)                                // The function to clean up dangling nodes
-
-	SkipLeftBoundary  bool          // Flag whether the nodes on the left boundary are skipped for committing
-	SkipRightBoundary bool          // Flag whether the nodes on the right boundary are skipped for committing
-	boundaryGauge     metrics.Gauge // Gauge to track how many boundary nodes are met
+var stPool = sync.Pool{
+	New: func() interface{} {
+		return NewStackTrie(nil)
+	},
 }
 
-// NewStackTrieOptions initializes an empty options for stackTrie.
-func NewStackTrieOptions() *StackTrieOptions { return &StackTrieOptions{} }
-
-// WithWriter configures trie node writer within the options.
-func (o *StackTrieOptions) WithWriter(writer func(path []byte, hash common.Hash, blob []byte)) *StackTrieOptions {
-	o.Writer = writer
-	return o
+func stackTrieFromPool(db ethdb.KeyValueWriter) *StackTrie {
+	st := stPool.Get().(*StackTrie)
+	st.db = db
+	return st
 }
 
-// WithCleaner configures the cleaner in the option for removing dangling nodes.
-func (o *StackTrieOptions) WithCleaner(cleaner func(path []byte)) *StackTrieOptions {
-	o.Cleaner = cleaner
-	return o
-}
-
-// WithSkipBoundary configures whether the left and right boundary nodes are
-// filtered for committing, along with a gauge metrics to track how many
-// boundary nodes are met.
-func (o *StackTrieOptions) WithSkipBoundary(skipLeft, skipRight bool, gauge metrics.Gauge) *StackTrieOptions {
-	o.SkipLeftBoundary = skipLeft
-	o.SkipRightBoundary = skipRight
-	o.boundaryGauge = gauge
-	return o
+func returnToPool(st *StackTrie) {
+	st.Reset()
+	stPool.Put(st)
 }
 
 // StackTrie is a trie implementation that expects keys to be inserted
 // in order. Once it determines that a subtree will no longer be inserted
 // into, it will hash it and free up the memory it uses.
 type StackTrie struct {
-	options *StackTrieOptions
-	root    *stNode
-	h       *hasher
-
-	first []byte // The (hex-encoded without terminator) key of first inserted entry, tracked as left boundary.
-	last  []byte // The (hex-encoded without terminator) key of last inserted entry, tracked as right boundary.
+	nodeType  uint8                // node type (as in branch, ext, leaf)
+	val       []byte               // value contained by this node if it's a leaf
+	key       []byte               // key chunk covered by this (full|ext) node
+	keyOffset int                  // offset of the key chunk inside a full key
+	children  [16]*StackTrie       // list of children (for fullnodes and exts)
+	db        ethdb.KeyValueWriter // Pointer to the commit db, can be nil
 }
 
 // NewStackTrie allocates and initializes an empty trie.
-func NewStackTrie(options *StackTrieOptions) *StackTrie {
-	if options == nil {
-		options = NewStackTrieOptions()
-	}
+func NewStackTrie(db ethdb.KeyValueWriter) *StackTrie {
 	return &StackTrie{
-		options: options,
-		root:    stPool.Get().(*stNode),
-		h:       newHasher(false),
+		nodeType: emptyNode,
+		db:       db,
 	}
 }
 
-// Update inserts a (key, value) pair into the stack trie.
-func (t *StackTrie) Update(key, value []byte) error {
-	if len(value) == 0 {
-		return errors.New("trying to insert empty (deletion)")
+// NewFromBinary initialises a serialized stacktrie with the given db.
+func NewFromBinary(data []byte, db ethdb.KeyValueWriter) (*StackTrie, error) {
+	var st StackTrie
+	if err := st.UnmarshalBinary(data); err != nil {
+		return nil, err
 	}
-	k := keybytesToHex(key)
-	k = k[:len(k)-1] // chop the termination flag
-	if bytes.Compare(t.last, k) >= 0 {
-		return errors.New("non-ascending key order")
+	// If a database is used, we need to recursively add it to every child
+	if db != nil {
+		st.setDb(db)
 	}
-	// track the first and last inserted entries.
-	if t.first == nil {
-		t.first = append([]byte{}, k...)
+	return &st, nil
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler
+func (st *StackTrie) MarshalBinary() (data []byte, err error) {
+	var (
+		b bytes.Buffer
+		w = bufio.NewWriter(&b)
+	)
+	if err := gob.NewEncoder(w).Encode(struct {
+		Nodetype  uint8
+		Val       []byte
+		Key       []byte
+		KeyOffset uint8
+	}{
+		st.nodeType,
+		st.val,
+		st.key,
+		uint8(st.keyOffset),
+	}); err != nil {
+		return nil, err
 	}
-	if t.last == nil {
-		t.last = append([]byte{}, k...) // allocate key slice
-	} else {
-		t.last = append(t.last[:0], k...) // reuse key slice
+	for _, child := range st.children {
+		if child == nil {
+			w.WriteByte(0)
+			continue
+		}
+		w.WriteByte(1)
+		if childData, err := child.MarshalBinary(); err != nil {
+			return nil, err
+		} else {
+			w.Write(childData)
+		}
 	}
-	t.insert(t.root, k, value, nil)
+	w.Flush()
+	return b.Bytes(), nil
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler
+func (st *StackTrie) UnmarshalBinary(data []byte) error {
+	r := bytes.NewReader(data)
+	return st.unmarshalBinary(r)
+}
+
+func (st *StackTrie) unmarshalBinary(r io.Reader) error {
+	var dec struct {
+		Nodetype  uint8
+		Val       []byte
+		Key       []byte
+		KeyOffset uint8
+	}
+	gob.NewDecoder(r).Decode(&dec)
+	st.nodeType = dec.Nodetype
+	st.val = dec.Val
+	st.key = dec.Key
+	st.keyOffset = int(dec.KeyOffset)
+
+	var hasChild = make([]byte, 1)
+	for i := range st.children {
+		if _, err := r.Read(hasChild); err != nil {
+			return err
+		} else if hasChild[0] == 0 {
+			continue
+		}
+		var child StackTrie
+		child.unmarshalBinary(r)
+		st.children[i] = &child
+	}
 	return nil
 }
 
-// MustUpdate is a wrapper of Update and will omit any encountered error but
-// just print out an error message.
-func (t *StackTrie) MustUpdate(key, value []byte) {
-	if err := t.Update(key, value); err != nil {
-		log.Error("Unhandled trie error in StackTrie.Update", "err", err)
+func (st *StackTrie) setDb(db ethdb.KeyValueWriter) {
+	st.db = db
+	for _, child := range st.children {
+		if child != nil {
+			child.setDb(db)
+		}
 	}
 }
 
-// Reset resets the stack trie object to empty state.
-func (t *StackTrie) Reset() {
-	t.options = NewStackTrieOptions()
-	t.root = stPool.Get().(*stNode)
-	t.first = nil
-	t.last = nil
-}
-
-// stNode represents a node within a StackTrie
-type stNode struct {
-	typ      uint8       // node type (as in branch, ext, leaf)
-	key      []byte      // key chunk covered by this (leaf|ext) node
-	val      []byte      // value contained by this node if it's a leaf
-	children [16]*stNode // list of children (for branch and exts)
-}
-
-// newLeaf constructs a leaf node with provided node key and value. The key
-// will be deep-copied in the function and safe to modify afterwards, but
-// value is not.
-func newLeaf(key, val []byte) *stNode {
-	st := stPool.Get().(*stNode)
-	st.typ = leafNode
-	st.key = append(st.key, key...)
+func newLeaf(ko int, key, val []byte, db ethdb.KeyValueWriter) *StackTrie {
+	st := stackTrieFromPool(db)
+	st.nodeType = leafNode
+	st.keyOffset = ko
+	st.key = append(st.key, key[ko:]...)
 	st.val = val
 	return st
 }
 
-// newExt constructs an extension node with provided node key and child. The
-// key will be deep-copied in the function and safe to modify afterwards.
-func newExt(key []byte, child *stNode) *stNode {
-	st := stPool.Get().(*stNode)
-	st.typ = extNode
-	st.key = append(st.key, key...)
+func newExt(ko int, key []byte, child *StackTrie, db ethdb.KeyValueWriter) *StackTrie {
+	st := stackTrieFromPool(db)
+	st.nodeType = extNode
+	st.keyOffset = ko
+	st.key = append(st.key, key[ko:]...)
 	st.children[0] = child
 	return st
 }
 
-// List all values that stNode#nodeType can hold
+// List all values that StackTrie#nodeType can hold
 const (
 	emptyNode = iota
 	branchNode
@@ -168,52 +187,64 @@ const (
 	hashedNode
 )
 
-func (n *stNode) reset() *stNode {
-	n.key = n.key[:0]
-	n.val = nil
-	for i := range n.children {
-		n.children[i] = nil
+// TryUpdate inserts a (key, value) pair into the stack trie
+func (st *StackTrie) TryUpdate(key, value []byte) error {
+	k := keybytesToHex(key)
+	if len(value) == 0 {
+		panic("deletion not supported")
 	}
-	n.typ = emptyNode
-	return n
+	st.insert(k[:len(k)-1], value)
+	return nil
+}
+
+func (st *StackTrie) Update(key, value []byte) {
+	if err := st.TryUpdate(key, value); err != nil {
+		log.Error(fmt.Sprintf("Unhandled trie error: %v", err))
+	}
+}
+
+func (st *StackTrie) Reset() {
+	st.db = nil
+	st.key = st.key[:0]
+	st.val = nil
+	for i := range st.children {
+		st.children[i] = nil
+	}
+	st.nodeType = emptyNode
+	st.keyOffset = 0
 }
 
 // Helper function that, given a full key, determines the index
 // at which the chunk pointed by st.keyOffset is different from
 // the same chunk in the full key.
-func (n *stNode) getDiffIndex(key []byte) int {
-	for idx, nibble := range n.key {
-		if nibble != key[idx] {
-			return idx
-		}
+func (st *StackTrie) getDiffIndex(key []byte) int {
+	diffindex := 0
+	for ; diffindex < len(st.key) && st.key[diffindex] == key[st.keyOffset+diffindex]; diffindex++ {
 	}
-	return len(n.key)
+	return diffindex
 }
 
 // Helper function to that inserts a (key, value) pair into
 // the trie.
-func (t *StackTrie) insert(st *stNode, key, value []byte, path []byte) {
-	switch st.typ {
+func (st *StackTrie) insert(key, value []byte) {
+	switch st.nodeType {
 	case branchNode: /* Branch */
-		idx := int(key[0])
-
+		idx := int(key[st.keyOffset])
 		// Unresolve elder siblings
 		for i := idx - 1; i >= 0; i-- {
 			if st.children[i] != nil {
-				if st.children[i].typ != hashedNode {
-					t.hash(st.children[i], append(path, byte(i)))
+				if st.children[i].nodeType != hashedNode {
+					st.children[i].hash()
 				}
 				break
 			}
 		}
-
 		// Add new child
 		if st.children[idx] == nil {
-			st.children[idx] = newLeaf(key[1:], value)
-		} else {
-			t.insert(st.children[idx], key[1:], value, append(path, key[0]))
+			st.children[idx] = stackTrieFromPool(st.db)
+			st.children[idx].keyOffset = st.keyOffset + 1
 		}
-
+		st.children[idx].insert(key, value)
 	case extNode: /* Ext */
 		// Compare both key chunks and see where they differ
 		diffidx := st.getDiffIndex(key)
@@ -226,50 +257,46 @@ func (t *StackTrie) insert(st *stNode, key, value []byte, path []byte) {
 		if diffidx == len(st.key) {
 			// Ext key and key segment are identical, recurse into
 			// the child node.
-			t.insert(st.children[0], key[diffidx:], value, append(path, key[:diffidx]...))
+			st.children[0].insert(key, value)
 			return
 		}
 		// Save the original part. Depending if the break is
 		// at the extension's last byte or not, create an
 		// intermediate extension or use the extension's child
 		// node directly.
-		var n *stNode
+		var n *StackTrie
 		if diffidx < len(st.key)-1 {
-			// Break on the non-last byte, insert an intermediate
-			// extension. The path prefix of the newly-inserted
-			// extension should also contain the different byte.
-			n = newExt(st.key[diffidx+1:], st.children[0])
-			t.hash(n, append(path, st.key[:diffidx+1]...))
+			n = newExt(diffidx+1, st.key, st.children[0], st.db)
 		} else {
 			// Break on the last byte, no need to insert
-			// an extension node: reuse the current node.
-			// The path prefix of the original part should
-			// still be same.
+			// an extension node: reuse the current node
 			n = st.children[0]
-			t.hash(n, append(path, st.key...))
 		}
-		var p *stNode
+		// Convert to hash
+		n.hash()
+		var p *StackTrie
 		if diffidx == 0 {
 			// the break is on the first byte, so
 			// the current node is converted into
 			// a branch node.
 			st.children[0] = nil
 			p = st
-			st.typ = branchNode
+			st.nodeType = branchNode
 		} else {
 			// the common prefix is at least one byte
 			// long, insert a new intermediate branch
 			// node.
-			st.children[0] = stPool.Get().(*stNode)
-			st.children[0].typ = branchNode
+			st.children[0] = stackTrieFromPool(st.db)
+			st.children[0].nodeType = branchNode
+			st.children[0].keyOffset = st.keyOffset + diffidx
 			p = st.children[0]
 		}
 		// Create a leaf for the inserted part
-		o := newLeaf(key[diffidx+1:], value)
+		o := newLeaf(st.keyOffset+diffidx+1, key, value, st.db)
 
 		// Insert both child leaves where they belong:
 		origIdx := st.key[diffidx]
-		newIdx := key[diffidx]
+		newIdx := key[diffidx+st.keyOffset]
 		p.children[origIdx] = n
 		p.children[newIdx] = o
 		st.key = st.key[:diffidx]
@@ -291,189 +318,196 @@ func (t *StackTrie) insert(st *stNode, key, value []byte, path []byte) {
 		// Check if the split occurs at the first nibble of the
 		// chunk. In that case, no prefix extnode is necessary.
 		// Otherwise, create that
-		var p *stNode
+		var p *StackTrie
 		if diffidx == 0 {
 			// Convert current leaf into a branch
-			st.typ = branchNode
+			st.nodeType = branchNode
 			p = st
 			st.children[0] = nil
 		} else {
 			// Convert current node into an ext,
 			// and insert a child branch node.
-			st.typ = extNode
-			st.children[0] = stPool.Get().(*stNode)
-			st.children[0].typ = branchNode
+			st.nodeType = extNode
+			st.children[0] = NewStackTrie(st.db)
+			st.children[0].nodeType = branchNode
+			st.children[0].keyOffset = st.keyOffset + diffidx
 			p = st.children[0]
 		}
 
-		// Create the two child leaves: one containing the original
-		// value and another containing the new value. The child leaf
-		// is hashed directly in order to free up some memory.
+		// Create the two child leaves: the one containing the
+		// original value and the one containing the new value
+		// The child leave will be hashed directly in order to
+		// free up some memory.
 		origIdx := st.key[diffidx]
-		p.children[origIdx] = newLeaf(st.key[diffidx+1:], st.val)
-		t.hash(p.children[origIdx], append(path, st.key[:diffidx+1]...))
+		p.children[origIdx] = newLeaf(diffidx+1, st.key, st.val, st.db)
+		p.children[origIdx].hash()
 
-		newIdx := key[diffidx]
-		p.children[newIdx] = newLeaf(key[diffidx+1:], value)
+		newIdx := key[diffidx+st.keyOffset]
+		p.children[newIdx] = newLeaf(p.keyOffset+1, key, value, st.db)
 
 		// Finally, cut off the key part that has been passed
 		// over to the children.
 		st.key = st.key[:diffidx]
 		st.val = nil
-
 	case emptyNode: /* Empty */
-		st.typ = leafNode
-		st.key = key
+		st.nodeType = leafNode
+		st.key = key[st.keyOffset:]
 		st.val = value
-
 	case hashedNode:
 		panic("trying to insert into hash")
-
 	default:
 		panic("invalid type")
 	}
 }
 
-// hash converts st into a 'hashedNode', if possible. Possible outcomes:
-//
+// hash() hashes the node 'st' and converts it into 'hashedNode', if possible.
+// Possible outcomes:
 // 1. The rlp-encoded value was >= 32 bytes:
-//   - Then the 32-byte `hash` will be accessible in `st.val`.
-//   - And the 'st.type' will be 'hashedNode'
-//
+//  - Then the 32-byte `hash` will be accessible in `st.val`.
+//  - And the 'st.type' will be 'hashedNode'
 // 2. The rlp-encoded value was < 32 bytes
-//   - Then the <32 byte rlp-encoded value will be accessible in 'st.val'.
-//   - And the 'st.type' will be 'hashedNode' AGAIN
+//  - Then the <32 byte rlp-encoded value will be accessible in 'st.val'.
+//  - And the 'st.type' will be 'hashedNode' AGAIN
 //
-// This method also sets 'st.type' to hashedNode, and clears 'st.key'.
-func (t *StackTrie) hash(st *stNode, path []byte) {
-	var (
-		blob     []byte   // RLP-encoded node blob
-		internal [][]byte // List of node paths covered by the extension node
-	)
-	switch st.typ {
-	case hashedNode:
+// This method will also:
+// set 'st.type' to hashedNode
+// clear 'st.key'
+func (st *StackTrie) hash() {
+	/* Shortcut if node is already hashed */
+	if st.nodeType == hashedNode {
 		return
+	}
+	// The 'hasher' is taken from a pool, but we don't actually
+	// claim an instance until all children are done with their hashing,
+	// and we actually need one
+	var h *hasher
 
-	case emptyNode:
-		st.val = types.EmptyRootHash.Bytes()
-		st.key = st.key[:0]
-		st.typ = hashedNode
-		return
-
+	switch st.nodeType {
 	case branchNode:
-		var nodes fullNode
+		var nodes [17]node
 		for i, child := range st.children {
 			if child == nil {
-				nodes.Children[i] = nilValueNode
+				nodes[i] = nilValueNode
 				continue
 			}
-			t.hash(child, append(path, byte(i)))
-
+			child.hash()
 			if len(child.val) < 32 {
-				nodes.Children[i] = rawNode(child.val)
+				nodes[i] = rawNode(child.val)
 			} else {
-				nodes.Children[i] = hashNode(child.val)
+				nodes[i] = hashNode(child.val)
 			}
-			st.children[i] = nil
-			stPool.Put(child.reset()) // Release child back to pool.
+			st.children[i] = nil // Reclaim mem from subtree
+			returnToPool(child)
 		}
-		nodes.encode(t.h.encbuf)
-		blob = t.h.encodedBytes()
-
+		nodes[16] = nilValueNode
+		h = newHasher(false)
+		defer returnHasherToPool(h)
+		h.tmp.Reset()
+		if err := rlp.Encode(&h.tmp, nodes); err != nil {
+			panic(err)
+		}
 	case extNode:
-		// recursively hash and commit child as the first step
-		t.hash(st.children[0], append(path, st.key...))
-
-		// Collect the path of internal nodes between shortNode and its **in disk**
-		// child. This is essential in the case of path mode scheme to avoid leaving
-		// danging nodes within the range of this internal path on disk, which would
-		// break the guarantee for state healing.
-		if len(st.children[0].val) >= 32 && t.options.Cleaner != nil {
-			for i := 1; i < len(st.key); i++ {
-				internal = append(internal, append(path, st.key[:i]...))
-			}
-		}
-		// encode the extension node
-		n := shortNode{Key: hexToCompactInPlace(st.key)}
+		st.children[0].hash()
+		h = newHasher(false)
+		defer returnHasherToPool(h)
+		h.tmp.Reset()
+		var valuenode node
 		if len(st.children[0].val) < 32 {
-			n.Val = rawNode(st.children[0].val)
+			valuenode = rawNode(st.children[0].val)
 		} else {
-			n.Val = hashNode(st.children[0].val)
+			valuenode = hashNode(st.children[0].val)
 		}
-		n.encode(t.h.encbuf)
-		blob = t.h.encodedBytes()
-
-		stPool.Put(st.children[0].reset()) // Release child back to pool.
-		st.children[0] = nil
-
+		n := struct {
+			Key []byte
+			Val node
+		}{
+			Key: hexToCompact(st.key),
+			Val: valuenode,
+		}
+		if err := rlp.Encode(&h.tmp, n); err != nil {
+			panic(err)
+		}
+		returnToPool(st.children[0])
+		st.children[0] = nil // Reclaim mem from subtree
 	case leafNode:
+		h = newHasher(false)
+		defer returnHasherToPool(h)
+		h.tmp.Reset()
 		st.key = append(st.key, byte(16))
-		n := shortNode{Key: hexToCompactInPlace(st.key), Val: valueNode(st.val)}
-
-		n.encode(t.h.encbuf)
-		blob = t.h.encodedBytes()
-
+		sz := hexToCompactInPlace(st.key)
+		n := [][]byte{st.key[:sz], st.val}
+		if err := rlp.Encode(&h.tmp, n); err != nil {
+			panic(err)
+		}
+	case emptyNode:
+		st.val = emptyRoot.Bytes()
+		st.key = st.key[:0]
+		st.nodeType = hashedNode
+		return
 	default:
-		panic("invalid node type")
+		panic("Invalid node type")
 	}
-
-	st.typ = hashedNode
 	st.key = st.key[:0]
-
-	// Skip committing the non-root node if the size is smaller than 32 bytes.
-	if len(blob) < 32 && len(path) > 0 {
-		st.val = common.CopyBytes(blob)
+	st.nodeType = hashedNode
+	if len(h.tmp) < 32 {
+		st.val = common.CopyBytes(h.tmp)
 		return
 	}
 	// Write the hash to the 'val'. We allocate a new val here to not mutate
-	// input values.
-	st.val = t.h.hashData(blob)
-
-	// Short circuit if the stack trie is not configured for writing.
-	if t.options.Writer == nil {
-		return
+	// input values
+	st.val = make([]byte, 32)
+	h.sha.Reset()
+	h.sha.Write(h.tmp)
+	h.sha.Read(st.val)
+	if st.db != nil {
+		// TODO! Is it safe to Put the slice here?
+		// Do all db implementations copy the value provided?
+		st.db.Put(st.val, h.tmp)
 	}
-	// Skip committing if the node is on the left boundary and stackTrie is
-	// configured to filter the boundary.
-	if t.options.SkipLeftBoundary && bytes.HasPrefix(t.first, path) {
-		if t.options.boundaryGauge != nil {
-			t.options.boundaryGauge.Inc(1)
-		}
-		return
-	}
-	// Skip committing if the node is on the right boundary and stackTrie is
-	// configured to filter the boundary.
-	if t.options.SkipRightBoundary && bytes.HasPrefix(t.last, path) {
-		if t.options.boundaryGauge != nil {
-			t.options.boundaryGauge.Inc(1)
-		}
-		return
-	}
-	// Clean up the internal dangling nodes covered by the extension node.
-	// This should be done before writing the node to adhere to the committing
-	// order from bottom to top.
-	for _, path := range internal {
-		t.options.Cleaner(path)
-	}
-	t.options.Writer(path, common.BytesToHash(st.val), blob)
 }
 
-// Hash will firstly hash the entire trie if it's still not hashed and then commit
-// all nodes to the associated database. Actually most of the trie nodes have been
-// committed already. The main purpose here is to commit the nodes on right boundary.
-//
-// For stack trie, Hash and Commit are functionally identical.
-func (t *StackTrie) Hash() common.Hash {
-	n := t.root
-	t.hash(n, nil)
-	return common.BytesToHash(n.val)
+// Hash returns the hash of the current node
+func (st *StackTrie) Hash() (h common.Hash) {
+	st.hash()
+	if len(st.val) != 32 {
+		// If the node's RLP isn't 32 bytes long, the node will not
+		// be hashed, and instead contain the  rlp-encoding of the
+		// node. For the top level node, we need to force the hashing.
+		ret := make([]byte, 32)
+		h := newHasher(false)
+		defer returnHasherToPool(h)
+		h.sha.Reset()
+		h.sha.Write(st.val)
+		h.sha.Read(ret)
+		return common.BytesToHash(ret)
+	}
+	return common.BytesToHash(st.val)
 }
 
-// Commit will firstly hash the entire trie if it's still not hashed and then commit
-// all nodes to the associated database. Actually most of the trie nodes have been
-// committed already. The main purpose here is to commit the nodes on right boundary.
+// Commit will firstly hash the entrie trie if it's still not hashed
+// and then commit all nodes to the associated database. Actually most
+// of the trie nodes MAY have been committed already. The main purpose
+// here is to commit the root node.
 //
-// For stack trie, Hash and Commit are functionally identical.
-func (t *StackTrie) Commit() common.Hash {
-	return t.Hash()
+// The associated database is expected, otherwise the whole commit
+// functionality should be disabled.
+func (st *StackTrie) Commit() (common.Hash, error) {
+	if st.db == nil {
+		return common.Hash{}, ErrCommitDisabled
+	}
+	st.hash()
+	if len(st.val) != 32 {
+		// If the node's RLP isn't 32 bytes long, the node will not
+		// be hashed (and committed), and instead contain the  rlp-encoding of the
+		// node. For the top level node, we need to force the hashing+commit.
+		ret := make([]byte, 32)
+		h := newHasher(false)
+		defer returnHasherToPool(h)
+		h.sha.Reset()
+		h.sha.Write(st.val)
+		h.sha.Read(ret)
+		st.db.Put(ret, st.val)
+		return common.BytesToHash(ret), nil
+	}
+	return common.BytesToHash(st.val), nil
 }

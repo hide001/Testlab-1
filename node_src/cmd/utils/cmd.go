@@ -33,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
@@ -42,7 +41,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/urfave/cli/v2"
+	"gopkg.in/urfave/cli.v1"
 )
 
 const (
@@ -69,7 +68,7 @@ func Fatalf(format string, args ...interface{}) {
 	os.Exit(1)
 }
 
-func StartNode(ctx *cli.Context, stack *node.Node, isConsole bool) {
+func StartNode(ctx *cli.Context, stack *node.Node) {
 	if err := stack.Start(); err != nil {
 		Fatalf("Error starting protocol stack: %v", err)
 	}
@@ -78,50 +77,31 @@ func StartNode(ctx *cli.Context, stack *node.Node, isConsole bool) {
 		signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
 		defer signal.Stop(sigc)
 
-		minFreeDiskSpace := 2 * ethconfig.Defaults.TrieDirtyCache // Default 2 * 256Mb
-		if ctx.IsSet(MinFreeDiskSpaceFlag.Name) {
-			minFreeDiskSpace = ctx.Int(MinFreeDiskSpaceFlag.Name)
-		} else if ctx.IsSet(CacheFlag.Name) || ctx.IsSet(CacheGCFlag.Name) {
-			minFreeDiskSpace = 2 * ctx.Int(CacheFlag.Name) * ctx.Int(CacheGCFlag.Name) / 100
+		minFreeDiskSpace := ethconfig.Defaults.TrieDirtyCache
+		if ctx.GlobalIsSet(MinFreeDiskSpaceFlag.Name) {
+			minFreeDiskSpace = ctx.GlobalInt(MinFreeDiskSpaceFlag.Name)
+		} else if ctx.GlobalIsSet(CacheFlag.Name) || ctx.GlobalIsSet(CacheGCFlag.Name) {
+			minFreeDiskSpace = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheGCFlag.Name) / 100
 		}
 		if minFreeDiskSpace > 0 {
 			go monitorFreeDiskSpace(sigc, stack.InstanceDir(), uint64(minFreeDiskSpace)*1024*1024)
 		}
 
-		shutdown := func() {
-			log.Info("Got interrupt, shutting down...")
-			go stack.Close()
-			for i := 10; i > 0; i-- {
-				<-sigc
-				if i > 1 {
-					log.Warn("Already shutting down, interrupt more to panic.", "times", i-1)
-				}
-			}
-			debug.Exit() // ensure trace and CPU profile data is flushed.
-			debug.LoudPanic("boom")
-		}
-
-		if isConsole {
-			// In JS console mode, SIGINT is ignored because it's handled by the console.
-			// However, SIGTERM still shuts down the node.
-			for {
-				sig := <-sigc
-				if sig == syscall.SIGTERM {
-					shutdown()
-					return
-				}
-			}
-		} else {
+		<-sigc
+		log.Info("Got interrupt, shutting down...")
+		go stack.Close()
+		for i := 10; i > 0; i-- {
 			<-sigc
-			shutdown()
+			if i > 1 {
+				log.Warn("Already shutting down, interrupt more to panic.", "times", i-1)
+			}
 		}
+		debug.Exit() // ensure trace and CPU profile data is flushed.
+		debug.LoudPanic("boom")
 	}()
 }
 
 func monitorFreeDiskSpace(sigc chan os.Signal, path string, freeDiskSpaceCritical uint64) {
-	if path == "" {
-		return
-	}
 	for {
 		freeSpace, err := getFreeDiskSpace(path)
 		if err != nil {
@@ -129,13 +109,13 @@ func monitorFreeDiskSpace(sigc chan os.Signal, path string, freeDiskSpaceCritica
 			break
 		}
 		if freeSpace < freeDiskSpaceCritical {
-			log.Error("Low disk space. Gracefully shutting down Geth to prevent database corruption.", "available", common.StorageSize(freeSpace), "path", path)
+			log.Error("Low disk space. Gracefully shutting down Geth to prevent database corruption.", "available", common.StorageSize(freeSpace))
 			sigc <- syscall.SIGTERM
 			break
 		} else if freeSpace < 2*freeDiskSpaceCritical {
-			log.Warn("Disk space is running low. Geth will shutdown if disk space runs below critical level.", "available", common.StorageSize(freeSpace), "critical_level", common.StorageSize(freeDiskSpaceCritical), "path", path)
+			log.Warn("Disk space is running low. Geth will shutdown if disk space runs below critical level.", "available", common.StorageSize(freeSpace), "critical_level", common.StorageSize(freeDiskSpaceCritical))
 		}
-		time.Sleep(30 * time.Second)
+		time.Sleep(60 * time.Second)
 	}
 }
 
@@ -185,7 +165,7 @@ func ImportChain(chain *core.BlockChain, fn string) error {
 	for batch := 0; ; batch++ {
 		// Load a batch of RLP blocks.
 		if checkInterrupt() {
-			return errors.New("interrupted")
+			return fmt.Errorf("interrupted")
 		}
 		i := 0
 		for ; i < importBatchSize; i++ {
@@ -208,21 +188,15 @@ func ImportChain(chain *core.BlockChain, fn string) error {
 		}
 		// Import the batch.
 		if checkInterrupt() {
-			return errors.New("interrupted")
+			return fmt.Errorf("interrupted")
 		}
 		missing := missingBlocks(chain, blocks[:i])
 		if len(missing) == 0 {
 			log.Info("Skipping batch as all blocks present", "batch", batch, "first", blocks[0].Hash(), "last", blocks[i-1].Hash())
 			continue
 		}
-		if failindex, err := chain.InsertChain(missing); err != nil {
-			var failnumber uint64
-			if failindex > 0 && failindex < len(missing) {
-				failnumber = missing[failindex].NumberU64()
-			} else {
-				failnumber = missing[0].NumberU64()
-			}
-			return fmt.Errorf("invalid block %d: %v", failnumber, err)
+		if _, err := chain.InsertChain(missing); err != nil {
+			return fmt.Errorf("invalid block %d: %v", n, err)
 		}
 	}
 	return nil
@@ -232,7 +206,7 @@ func missingBlocks(chain *core.BlockChain, blocks []*types.Block) []*types.Block
 	head := chain.CurrentBlock()
 	for i, block := range blocks {
 		// If we're behind the chain head, only check block, state is available at head
-		if head.Number.Uint64() > block.NumberU64() {
+		if head.NumberU64() > block.NumberU64() {
 			if !chain.HasBlock(block.Hash(), block.NumberU64()) {
 				return blocks[i:]
 			}
@@ -375,101 +349,6 @@ func ExportPreimages(db ethdb.Database, fn string) error {
 	return nil
 }
 
-// ExportSnapshotPreimages exports the preimages corresponding to the enumeration of
-// the snapshot for a given root.
-func ExportSnapshotPreimages(chaindb ethdb.Database, snaptree *snapshot.Tree, fn string, root common.Hash) error {
-	log.Info("Exporting preimages", "file", fn)
-
-	fh, err := os.OpenFile(fn, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.ModePerm)
-	if err != nil {
-		return err
-	}
-	defer fh.Close()
-
-	// Enable gzip compressing if file name has gz suffix.
-	var writer io.Writer = fh
-	if strings.HasSuffix(fn, ".gz") {
-		gz := gzip.NewWriter(writer)
-		defer gz.Close()
-		writer = gz
-	}
-	buf := bufio.NewWriter(writer)
-	defer buf.Flush()
-	writer = buf
-
-	type hashAndPreimageSize struct {
-		Hash common.Hash
-		Size int
-	}
-	hashCh := make(chan hashAndPreimageSize)
-
-	var (
-		start     = time.Now()
-		logged    = time.Now()
-		preimages int
-	)
-	go func() {
-		defer close(hashCh)
-		accIt, err := snaptree.AccountIterator(root, common.Hash{})
-		if err != nil {
-			log.Error("Failed to create account iterator", "error", err)
-			return
-		}
-		defer accIt.Release()
-
-		for accIt.Next() {
-			acc, err := types.FullAccount(accIt.Account())
-			if err != nil {
-				log.Error("Failed to get full account", "error", err)
-				return
-			}
-			preimages += 1
-			hashCh <- hashAndPreimageSize{Hash: accIt.Hash(), Size: common.AddressLength}
-
-			if acc.Root != (common.Hash{}) && acc.Root != types.EmptyRootHash {
-				stIt, err := snaptree.StorageIterator(root, accIt.Hash(), common.Hash{})
-				if err != nil {
-					log.Error("Failed to create storage iterator", "error", err)
-					return
-				}
-				for stIt.Next() {
-					preimages += 1
-					hashCh <- hashAndPreimageSize{Hash: stIt.Hash(), Size: common.HashLength}
-
-					if time.Since(logged) > time.Second*8 {
-						logged = time.Now()
-						log.Info("Exporting preimages", "count", preimages, "elapsed", common.PrettyDuration(time.Since(start)))
-					}
-				}
-				stIt.Release()
-			}
-			if time.Since(logged) > time.Second*8 {
-				logged = time.Now()
-				log.Info("Exporting preimages", "count", preimages, "elapsed", common.PrettyDuration(time.Since(start)))
-			}
-		}
-	}()
-
-	for item := range hashCh {
-		preimage := rawdb.ReadPreimage(chaindb, item.Hash)
-		if len(preimage) == 0 {
-			return fmt.Errorf("missing preimage for %v", item.Hash)
-		}
-		if len(preimage) != item.Size {
-			return fmt.Errorf("invalid preimage size, have %d", len(preimage))
-		}
-		rlpenc, err := rlp.EncodeToBytes(preimage)
-		if err != nil {
-			return fmt.Errorf("error encoding preimage: %w", err)
-		}
-		if _, err := writer.Write(rlpenc); err != nil {
-			return fmt.Errorf("failed to write preimage: %w", err)
-		}
-	}
-	log.Info("Exported preimages", "count", preimages, "elapsed", common.PrettyDuration(time.Since(start)), "file", fn)
-	return nil
-}
-
 // exportHeader is used in the export/import flow. When we do an export,
 // the first element we output is the exportHeader.
 // Whenever a backwards-incompatible change is made, the Version header
@@ -556,7 +435,7 @@ func ImportLDBData(db ethdb.Database, f string, startIndex int64, interrupt chan
 		case OpBatchAdd:
 			batch.Put(key, val)
 		default:
-			return fmt.Errorf("unknown op %d", op)
+			return fmt.Errorf("unknown op %d\n", op)
 		}
 		if batch.ValueSize() > ethdb.IdealBatchSize {
 			if err := batch.Write(); err != nil {

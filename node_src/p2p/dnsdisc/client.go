@@ -1,4 +1,4 @@
-// Copyright 2019 The go-ethereum Authors
+// Copyright 2018 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
 // The go-ethereum library is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@ package dnsdisc
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -27,12 +26,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	lru "github.com/hashicorp/golang-lru"
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 )
@@ -41,7 +40,7 @@ import (
 type Client struct {
 	cfg          Config
 	clock        mclock.Clock
-	entries      *lru.Cache[string, entry]
+	entries      *lru.Cache
 	ratelimit    *rate.Limiter
 	singleflight singleflight.Group
 }
@@ -96,10 +95,14 @@ func (cfg Config) withDefaults() Config {
 // NewClient creates a client.
 func NewClient(cfg Config) *Client {
 	cfg = cfg.withDefaults()
+	cache, err := lru.New(cfg.CacheLimit)
+	if err != nil {
+		panic(err)
+	}
 	rlimit := rate.NewLimiter(rate.Limit(cfg.RateLimit), 10)
 	return &Client{
 		cfg:       cfg,
-		entries:   lru.NewCache[string, entry](cfg.CacheLimit),
+		entries:   cache,
 		clock:     mclock.System{},
 		ratelimit: rlimit,
 	}
@@ -172,7 +175,7 @@ func (c *Client) resolveEntry(ctx context.Context, domain, hash string) (entry, 
 	}
 	cacheKey := truncateHash(hash)
 	if e, ok := c.entries.Get(cacheKey); ok {
-		return e, nil
+		return e.(entry), nil
 	}
 
 	ei, err, _ := c.singleflight.Do(cacheKey, func() (interface{}, error) {
@@ -201,7 +204,7 @@ func (c *Client) doResolveEntry(ctx context.Context, domain, hash string) (entry
 	}
 	for _, txt := range txts {
 		e, err := parseEntry(txt, c.cfg.ValidSchemes)
-		if errors.Is(err, errUnknownEntry) {
+		if err == errUnknownEntry {
 			continue
 		}
 		if !bytes.HasPrefix(crypto.Keccak256([]byte(txt)), wantHash) {
@@ -278,7 +281,7 @@ func (it *randomIterator) nextNode() *enode.Node {
 		}
 		n, err := ct.syncRandom(it.ctx)
 		if err != nil {
-			if errors.Is(err, it.ctx.Err()) {
+			if err == it.ctx.Err() {
 				return nil // context canceled.
 			}
 			it.c.cfg.Logger.Debug("Error in DNS random node sync", "tree", ct.loc.domain, "err", err)

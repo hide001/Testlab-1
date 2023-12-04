@@ -20,8 +20,8 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"io/ioutil"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,8 +32,7 @@ func TestServerRegisterName(t *testing.T) {
 	server := NewServer()
 	service := new(testService)
 
-	svcName := "test"
-	if err := server.RegisterName(svcName, service); err != nil {
+	if err := server.RegisterName("test", service); err != nil {
 		t.Fatalf("%v", err)
 	}
 
@@ -41,19 +40,19 @@ func TestServerRegisterName(t *testing.T) {
 		t.Fatalf("Expected 2 service entries, got %d", len(server.services.services))
 	}
 
-	svc, ok := server.services.services[svcName]
+	svc, ok := server.services.services["test"]
 	if !ok {
-		t.Fatalf("Expected service %s to be registered", svcName)
+		t.Fatalf("Expected service calc to be registered")
 	}
 
-	wantCallbacks := 14
+	wantCallbacks := 9
 	if len(svc.callbacks) != wantCallbacks {
 		t.Errorf("Expected %d callbacks for service 'service', got %d", wantCallbacks, len(svc.callbacks))
 	}
 }
 
 func TestServer(t *testing.T) {
-	files, err := os.ReadDir("testdata")
+	files, err := ioutil.ReadDir("testdata")
 	if err != nil {
 		t.Fatal("where'd my testdata go?")
 	}
@@ -71,8 +70,7 @@ func TestServer(t *testing.T) {
 
 func runTestScript(t *testing.T, file string) {
 	server := newTestServer()
-	server.SetBatchLimits(4, 100000)
-	content, err := os.ReadFile(file)
+	content, err := ioutil.ReadFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +134,7 @@ func TestServerShortLivedConn(t *testing.T) {
 		if err != nil {
 			t.Fatal("can't dial:", err)
 		}
-
+		defer conn.Close()
 		conn.SetDeadline(deadline)
 		// Write the request, then half-close the connection so the server stops reading.
 		conn.Write([]byte(request))
@@ -144,51 +142,11 @@ func TestServerShortLivedConn(t *testing.T) {
 		// Now try to get the response.
 		buf := make([]byte, 2000)
 		n, err := conn.Read(buf)
-		conn.Close()
-
 		if err != nil {
 			t.Fatal("read error:", err)
 		}
 		if !bytes.Equal(buf[:n], []byte(wantResp)) {
 			t.Fatalf("wrong response: %s", buf[:n])
-		}
-	}
-}
-
-func TestServerBatchResponseSizeLimit(t *testing.T) {
-	server := newTestServer()
-	defer server.Stop()
-	server.SetBatchLimits(100, 60)
-	var (
-		batch  []BatchElem
-		client = DialInProc(server)
-	)
-	for i := 0; i < 5; i++ {
-		batch = append(batch, BatchElem{
-			Method: "test_echo",
-			Args:   []any{"x", 1},
-			Result: new(echoResult),
-		})
-	}
-	if err := client.BatchCall(batch); err != nil {
-		t.Fatal("error sending batch:", err)
-	}
-	for i := range batch {
-		// We expect the first two queries to be ok, but after that the size limit takes effect.
-		if i < 2 {
-			if batch[i].Error != nil {
-				t.Fatalf("batch elem %d has unexpected error: %v", i, batch[i].Error)
-			}
-			continue
-		}
-		// After two, we expect an error.
-		re, ok := batch[i].Error.(Error)
-		if !ok {
-			t.Fatalf("batch elem %d has wrong error: %v", i, batch[i].Error)
-		}
-		wantedCode := errcodeResponseTooLarge
-		if re.ErrorCode() != wantedCode {
-			t.Errorf("batch elem %d wrong error code, have %d want %d", i, re.ErrorCode(), wantedCode)
 		}
 	}
 }

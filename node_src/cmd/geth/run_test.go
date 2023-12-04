@@ -19,14 +19,23 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/pkg/reexec"
 	"github.com/ethereum/go-ethereum/internal/cmdtest"
-	"github.com/ethereum/go-ethereum/internal/reexec"
 	"github.com/ethereum/go-ethereum/rpc"
 )
+
+func tmpdir(t *testing.T) string {
+	dir, err := ioutil.TempDir("", "geth-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 type testgeth struct {
 	*cmdtest.TestCmd
@@ -55,15 +64,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func initGeth(t *testing.T) string {
-	args := []string{"--networkid=42", "init", "./testdata/clique.json"}
-	t.Logf("Initializing geth: %v ", args)
-	g := runGeth(t, args...)
-	datadir := g.Datadir
-	g.WaitExit()
-	return datadir
-}
-
 // spawns geth with the given command line args. If the args don't set --datadir, the
 // child g gets a temporary data directory.
 func runGeth(t *testing.T, args ...string) *testgeth {
@@ -82,9 +82,15 @@ func runGeth(t *testing.T, args ...string) *testgeth {
 		}
 	}
 	if tt.Datadir == "" {
-		// The temporary datadir will be removed automatically if something fails below.
-		tt.Datadir = t.TempDir()
+		tt.Datadir = tmpdir(t)
+		tt.Cleanup = func() { os.RemoveAll(tt.Datadir) }
 		args = append([]string{"--datadir", tt.Datadir}, args...)
+		// Remove the temporary datadir if something fails below.
+		defer func() {
+			if t.Failed() {
+				tt.Cleanup()
+			}
+		}()
 	}
 
 	// Boot "geth". This actually runs the test binary but the TestMain

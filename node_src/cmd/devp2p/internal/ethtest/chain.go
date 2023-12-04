@@ -1,32 +1,31 @@
 // Copyright 2020 The go-ethereum Authors
-// This file is part of go-ethereum.
+// This file is part of the go-ethereum library.
 //
-// go-ethereum is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
+// The go-ethereum library is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 //
-// go-ethereum is distributed in the hope that it will be useful,
+// The go-ethereum library is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU General Public License for more details.
+// GNU Lesser General Public License for more details.
 //
-// You should have received a copy of the GNU General Public License
-// along with go-ethereum. If not, see <http://www.gnu.org/licenses/>.
+// You should have received a copy of the GNU Lesser General Public License
+// along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 package ethtest
 
 import (
 	"compress/gzip"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/big"
 	"os"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -48,7 +47,7 @@ func (c *Chain) Len() int {
 // TD calculates the total difficulty of the chain at the
 // chain head.
 func (c *Chain) TD() *big.Int {
-	sum := new(big.Int)
+	sum := big.NewInt(0)
 	for _, block := range c.blocks[:c.Len()] {
 		sum.Add(sum, block.Difficulty())
 	}
@@ -58,7 +57,7 @@ func (c *Chain) TD() *big.Int {
 // TotalDifficultyAt calculates the total difficulty of the chain
 // at the given block height.
 func (c *Chain) TotalDifficultyAt(height int) *big.Int {
-	sum := new(big.Int)
+	sum := big.NewInt(0)
 	if height >= c.Len() {
 		return sum
 	}
@@ -68,16 +67,9 @@ func (c *Chain) TotalDifficultyAt(height int) *big.Int {
 	return sum
 }
 
-func (c *Chain) RootAt(height int) common.Hash {
-	if height < c.Len() {
-		return c.blocks[height].Root()
-	}
-	return common.Hash{}
-}
-
 // ForkID gets the fork id of the chain.
 func (c *Chain) ForkID() forkid.ID {
-	return forkid.NewID(c.chainConfig, c.blocks[0], uint64(c.Len()), c.blocks[0].Time())
+	return forkid.NewID(c.chainConfig, c.blocks[0].Hash(), uint64(c.Len()))
 }
 
 // Shorten returns a copy chain of a desired height from the imported
@@ -97,12 +89,12 @@ func (c *Chain) Head() *types.Block {
 	return c.blocks[c.Len()-1]
 }
 
-func (c *Chain) GetHeaders(req *GetBlockHeaders) ([]*types.Header, error) {
+func (c *Chain) GetHeaders(req GetBlockHeaders) (BlockHeaders, error) {
 	if req.Amount < 1 {
-		return nil, errors.New("no block headers requested")
+		return nil, fmt.Errorf("no block headers requested")
 	}
 
-	headers := make([]*types.Header, req.Amount)
+	headers := make(BlockHeaders, req.Amount)
 	var blockNumber uint64
 
 	// range over blocks to check if our chain has the requested header
@@ -120,6 +112,7 @@ func (c *Chain) GetHeaders(req *GetBlockHeaders) ([]*types.Header, error) {
 		for i := 1; i < int(req.Amount); i++ {
 			blockNumber -= (1 - req.Skip)
 			headers[i] = c.blocks[blockNumber].Header()
+
 		}
 
 		return headers, nil
@@ -140,7 +133,7 @@ func loadChain(chainfile string, genesis string) (*Chain, error) {
 	if err != nil {
 		return nil, err
 	}
-	gblock := gen.ToBlock()
+	gblock := gen.ToBlock(nil)
 
 	blocks, err := blocksFromFile(chainfile, gblock)
 	if err != nil {
@@ -152,7 +145,7 @@ func loadChain(chainfile string, genesis string) (*Chain, error) {
 }
 
 func loadGenesis(genesisFile string) (core.Genesis, error) {
-	chainConfig, err := os.ReadFile(genesisFile)
+	chainConfig, err := ioutil.ReadFile(genesisFile)
 	if err != nil {
 		return core.Genesis{}, err
 	}

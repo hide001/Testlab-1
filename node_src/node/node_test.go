@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -86,7 +88,11 @@ func TestNodeStartMultipleTimes(t *testing.T) {
 // Tests that if the data dir is already in use, an appropriate error is returned.
 func TestNodeUsedDataDir(t *testing.T) {
 	// Create a temporary folder to use as the data directory
-	dir := t.TempDir()
+	dir, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("failed to create temporary data directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
 
 	// Create a new node based on the data directory
 	original, err := New(&Config{DataDir: dir})
@@ -387,7 +393,7 @@ func TestLifecycleTerminationGuarantee(t *testing.T) {
 // on the given prefix
 func TestRegisterHandler_Successful(t *testing.T) {
 	node := createNode(t, 7878, 7979)
-	defer node.Close()
+
 	// create and mount handler
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("success"))
@@ -559,38 +565,38 @@ func (test rpcPrefixTest) check(t *testing.T, node *Node) {
 	}
 
 	for _, path := range test.wantHTTP {
-		resp := rpcRequest(t, httpBase+path, testMethod)
+		resp := rpcRequest(t, httpBase+path)
 		if resp.StatusCode != 200 {
 			t.Errorf("Error: %s: bad status code %d, want 200", path, resp.StatusCode)
 		}
 	}
 	for _, path := range test.wantNoHTTP {
-		resp := rpcRequest(t, httpBase+path, testMethod)
+		resp := rpcRequest(t, httpBase+path)
 		if resp.StatusCode != 404 {
 			t.Errorf("Error: %s: bad status code %d, want 404", path, resp.StatusCode)
 		}
 	}
 	for _, path := range test.wantWS {
-		err := wsRequest(t, wsBase+path)
+		err := wsRequest(t, wsBase+path, "")
 		if err != nil {
 			t.Errorf("Error: %s: WebSocket connection failed: %v", path, err)
 		}
 	}
 	for _, path := range test.wantNoWS {
-		err := wsRequest(t, wsBase+path)
+		err := wsRequest(t, wsBase+path, "")
 		if err == nil {
 			t.Errorf("Error: %s: WebSocket connection succeeded for path in wantNoWS", path)
 		}
+
 	}
 }
 
 func createNode(t *testing.T, httpPort, wsPort int) *Node {
 	conf := &Config{
-		HTTPHost:     "127.0.0.1",
-		HTTPPort:     httpPort,
-		WSHost:       "127.0.0.1",
-		WSPort:       wsPort,
-		HTTPTimeouts: rpc.DefaultHTTPTimeouts,
+		HTTPHost: "127.0.0.1",
+		HTTPPort: httpPort,
+		WSHost:   "127.0.0.1",
+		WSPort:   wsPort,
 	}
 	node, err := New(conf)
 	if err != nil {
@@ -614,8 +620,8 @@ func doHTTPRequest(t *testing.T, req *http.Request) *http.Response {
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("could not issue a GET request to the given endpoint: %v", err)
+
 	}
-	t.Cleanup(func() { resp.Body.Close() })
 	return resp
 }
 
