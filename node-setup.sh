@@ -56,7 +56,7 @@ task4(){
       echo -e '\nbash /root/core-blockchain/node-start.sh --rpc' >>/etc/profile
   fi
   export PATH=$PATH:/usr/local/go/bin
-  go env -w GO111MODULE=off
+  go env -w GO111MODULE=on
   echo -e "\n${GREEN}[TASK 4 PASSED]${NC}\n"
 }
 
