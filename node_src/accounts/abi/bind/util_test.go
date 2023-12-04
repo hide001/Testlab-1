@@ -119,9 +119,9 @@ func TestWaitDeployedCornerCases(t *testing.T) {
 	defer cancel()
 	backend.SendTransaction(ctx, tx)
 	backend.Commit()
-	notContentCreation := errors.New("tx is not contract creation")
-	if _, err := bind.WaitDeployed(ctx, backend, tx); err.Error() != notContentCreation.Error() {
-		t.Errorf("error missmatch: want %q, got %q, ", notContentCreation, err)
+	notContractCreation := errors.New("tx is not contract creation")
+	if _, err := bind.WaitDeployed(ctx, backend, tx); err.Error() != notContractCreation.Error() {
+		t.Errorf("error mismatch: want %q, got %q, ", notContractCreation, err)
 	}
 
 	// Create a transaction that is not mined.
@@ -131,7 +131,7 @@ func TestWaitDeployedCornerCases(t *testing.T) {
 	go func() {
 		contextCanceled := errors.New("context canceled")
 		if _, err := bind.WaitDeployed(ctx, backend, tx); err.Error() != contextCanceled.Error() {
-			t.Errorf("error missmatch: want %q, got %q, ", contextCanceled, err)
+			t.Errorf("error mismatch: want %q, got %q, ", contextCanceled, err)
 		}
 	}()
 
