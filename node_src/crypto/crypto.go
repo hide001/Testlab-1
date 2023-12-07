@@ -26,18 +26,16 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/ioutil"
 	"math/big"
 	"os"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/rlp"
 	"golang.org/x/crypto/sha3"
 )
 
-//SignatureLength indicates the byte length required to carry a signature with recovery id.
+// SignatureLength indicates the byte length required to carry a signature with recovery id.
 const SignatureLength = 64 + 1 // 64 bytes ECDSA signature + 1 byte recovery id
 
 // RecoveryIDOffset points to the byte offset within the signature that contains the recovery id.
@@ -46,12 +44,9 @@ const RecoveryIDOffset = 64
 // DigestLength sets the signature digest exact length
 const DigestLength = 32
 
-const hashCacheSize = 256 * 1024 * 1024
-
 var (
 	secp256k1N, _  = new(big.Int).SetString("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
 	secp256k1halfN = new(big.Int).Div(secp256k1N, big.NewInt(2))
-	hashCache      = fastcache.New(hashCacheSize)
 )
 
 var errInvalidPubkey = errors.New("invalid secp256k1 public key")
@@ -74,34 +69,6 @@ func HashData(kh KeccakState, data []byte) (h common.Hash) {
 	kh.Reset()
 	kh.Write(data)
 	kh.Read(h[:])
-	return h
-}
-
-// HashDataWithCache hashes the provided data using the KeccakState and returns a 32 byte hash;
-// when len(data) is belong to (0,96], cache will be used;
-// design for hashing common.Address, common.Hash and opSha3
-func HashDataWithCache(kh KeccakState, data []byte) (h common.Hash) {
-	l := len(data)
-	// 96 is set according to txs on heco mainnet
-	if l > 0 && l <= 96 {
-		if hash := hashCache.Get(nil, data); len(hash) == 32 {
-			return common.BytesToHash(hash)
-		}
-	}
-
-	d := kh
-	if d == nil {
-		d = NewKeccakState()
-	} else {
-		d.Reset()
-	}
-	d.Write(data)
-	d.Read(h[:])
-
-	if l > 0 && l <= 96 {
-		hashCache.Set(data, h[:])
-	}
-
 	return h
 }
 
@@ -174,11 +141,11 @@ func toECDSA(d []byte, strict bool) (*ecdsa.PrivateKey, error) {
 
 	// The priv.D must < N
 	if priv.D.Cmp(secp256k1N) >= 0 {
-		return nil, fmt.Errorf("invalid private key, >=N")
+		return nil, errors.New("invalid private key, >=N")
 	}
 	// The priv.D must not be zero or negative.
 	if priv.D.Sign() <= 0 {
-		return nil, fmt.Errorf("invalid private key, zero or negative")
+		return nil, errors.New("invalid private key, zero or negative")
 	}
 
 	priv.PublicKey.X, priv.PublicKey.Y = priv.PublicKey.Curve.ScalarBaseMult(d)
@@ -237,7 +204,7 @@ func LoadECDSA(file string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	} else if n != len(buf) {
-		return nil, fmt.Errorf("key file too short, want 64 hex characters")
+		return nil, errors.New("key file too short, want 64 hex characters")
 	}
 	if err := checkKeyFileEnd(r); err != nil {
 		return nil, err
@@ -282,7 +249,7 @@ func checkKeyFileEnd(r *bufio.Reader) error {
 // restrictive permissions. The key data is saved hex-encoded.
 func SaveECDSA(file string, key *ecdsa.PrivateKey) error {
 	k := hex.EncodeToString(FromECDSA(key))
-	return ioutil.WriteFile(file, []byte(k), 0600)
+	return os.WriteFile(file, []byte(k), 0600)
 }
 
 // GenerateKey generates a new private key.

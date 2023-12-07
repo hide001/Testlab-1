@@ -47,16 +47,16 @@ task4(){
   echo -e '\nPATH=$PATH:/usr/local/go/bin' >>/etc/profile
 
   if [[ $totalValidator -gt 0 ]]; then
-      echo -e '\ncd /root/core-blockchain/' >>/etc/profile
-      echo -e '\nbash /root/core-blockchain/node-start.sh --validator' >>/etc/profile
+      echo -e '\ncd /root/Testlab-1/' >>/etc/profile
+      echo -e '\nbash /root/Testlab-1/node-start.sh --validator' >>/etc/profile
   fi
 
   if [[ $totalRpc -gt 0 ]]; then
-      echo -e '\ncd /root/core-blockchain/' >>/etc/profile
-      echo -e '\nbash /root/core-blockchain/node-start.sh --rpc' >>/etc/profile
+      echo -e '\ncd /root/Testlab-1/' >>/etc/profile
+      echo -e '\nbash /root/Testlab-1/node-start.sh --rpc' >>/etc/profile
   fi
   export PATH=$PATH:/usr/local/go/bin
-  go env -w GO111MODULE=off
+  go env -w GO111MODULE=auto
   echo -e "\n${GREEN}[TASK 4 PASSED]${NC}\n"
 }
 
@@ -90,7 +90,7 @@ task6(){
   # go get github.com/ethereum/go-ethereum/consensus/clique
 
   # go env -w GO111MODULE=on
-  make geth
+  make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
 
@@ -114,7 +114,6 @@ task8(){
   #TASK 8
   echo -e "\n${ORANGE}TASK: ${GREEN}[Setting up Accounts]${NC}\n"
   echo -e "\n${ORANGE}This step is very important. Input a password that will be used for a newly created validator account. In next step you will recieve a public key for your validator account"
-  echo -e "${ORANGE}Once a validator account is created using your given password, I'll give you where the keystore file is located so you can import it in metamask\n\n${NC}"
 
   i=1
   while [[ $i -le $totalValidator ]]; do
