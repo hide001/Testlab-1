@@ -233,6 +233,15 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+	// do some extra work if consensus engine is congress.
+	if congressEngine, ok := eth.engine.(*congress.Congress); ok {
+		// set state fn
+		congressEngine.SetStateFn(eth.blockchain.StateAt)
+		// set consensus-related transaction validator
+		eth.txPool.InitExTxValidator(congressEngine)
+		//
+		congressEngine.SetChain(eth.blockchain)
+	}
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := cacheConfig.TrieCleanLimit + cacheConfig.TrieDirtyLimit + cacheConfig.SnapshotLimit
 	if eth.handler, err = newHandler(&handlerConfig{
