@@ -443,7 +443,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	}
 	tip := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 	if st.evm.ChainConfig().Congress != nil {
-		st.state.AddBalance(consensus.FeeRecoder, tip)
+		// st.state.AddBalance(consensus.FeeRecoder, tip)
 	} else {
 		st.state.AddBalance(st.evm.Context.Coinbase, tip)
 	}
