@@ -441,6 +441,12 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		st.state.AddBalance(st.evm.Context.Coinbase, fee)
 	}
 
+	if st.evm.ChainConfig().Congress != nil {
+		st.state.AddBalance(consensus.FeeRecoder, tip)
+	} else {
+		st.state.AddBalance(st.evm.Context.Coinbase, tip)
+	}
+	
 	return &ExecutionResult{
 		UsedGas:    st.gasUsed(),
 		Err:        vmerr,

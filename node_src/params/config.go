@@ -58,6 +58,12 @@ var (
 		TerminalTotalDifficultyPassed: true,
 		ShanghaiTime:                  newUint64(1681338455),
 		Ethash:                        new(EthashConfig),
+		Congress: &CongressConfig{
+			Period: 3,
+			Epoch:  200,
+
+			EnableDevVerification: true,
+		},
 	}
 	// HoleskyChainConfig contains the chain parameters to run a node on the Holesky test network.
 	HoleskyChainConfig = &ChainConfig{
@@ -241,6 +247,12 @@ var (
 		TerminalTotalDifficultyPassed: false,
 		Ethash:                        new(EthashConfig),
 		Clique:                        nil,
+		Congress: &CongressConfig{
+			Period: 3,
+			Epoch:  200,
+
+			EnableDevVerification: true,
+		},
 	}
 
 	// NonActivatedConfig defines the chain configuration without activating
@@ -332,6 +344,7 @@ type ChainConfig struct {
 	Ethash    *EthashConfig `json:"ethash,omitempty"`
 	Clique    *CliqueConfig `json:"clique,omitempty"`
 	IsDevMode bool          `json:"isDev,omitempty"`
+	Congress *CongressConfig `json:"congress,omitempty"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -351,6 +364,19 @@ type CliqueConfig struct {
 // String implements the stringer interface, returning the consensus engine details.
 func (c *CliqueConfig) String() string {
 	return "clique"
+}
+
+// CongressConfig is the consensus engine configs for proof-of-stake-authority based sealing.
+type CongressConfig struct {
+	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
+	Epoch  uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
+
+	EnableDevVerification bool `json:"enableDevVerification"` // Enable developer address verification
+}
+
+// String implements the stringer interface, returning the consensus engine details.
+func (c *CongressConfig) String() string {
+	return "congress"
 }
 
 // Description returns a human-readable description of ChainConfig.
@@ -380,6 +406,8 @@ func (c *ChainConfig) Description() string {
 		} else {
 			banner += "Consensus: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
 		}
+	case c.Congress != nil:
+		banner += "Consensus: Congress (proof-of-stake Authority), A cool DPOSA\n"
 	default:
 		banner += "Consensus: unknown\n"
 	}
