@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -440,13 +441,13 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		fee.Mul(fee, effectiveTip)
 		st.state.AddBalance(st.evm.Context.Coinbase, fee)
 	}
-
+	tip := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 	if st.evm.ChainConfig().Congress != nil {
 		st.state.AddBalance(consensus.FeeRecoder, tip)
 	} else {
 		st.state.AddBalance(st.evm.Context.Coinbase, tip)
 	}
-	
+
 	return &ExecutionResult{
 		UsedGas:    st.gasUsed(),
 		Err:        vmerr,
