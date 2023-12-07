@@ -90,6 +90,7 @@ task6(){
   # go get github.com/ethereum/go-ethereum/consensus/clique
 
   # go env -w GO111MODULE=on
+  go mod tidy
   make all
   echo -e "\n${GREEN}[TASK 6 PASSED]${NC}\n"
 }
